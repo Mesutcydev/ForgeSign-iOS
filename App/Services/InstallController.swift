@@ -55,23 +55,26 @@ final class InstallController: ObservableObject {
                     }
                 }
 
-                guard let itmsURL = URL(string: server.itmsServicesURL) else {
+                // On iOS 18+, UIApplication.open(itms-services://) often returns
+                // success without ever showing the install prompt (no entitlement).
+                // Always hand off through Safari: the local /install page redirects
+                // into itms-services, which is the path Feather and other on-device
+                // installers rely on.
+                guard let page = URL(string: "\(base)/install") else {
                     throw NSError(domain: "forgesign.install", code: 2,
-                                  userInfo: [NSLocalizedDescriptionKey: "Bad itms-services URL."])
+                                  userInfo: [NSLocalizedDescriptionKey: "Bad install page URL."])
                 }
-                installStatus = "Server ready. Triggering installer…"
-                UIApplication.shared.open(itmsURL) { [weak self] opened in
+                installStatus = "Opening Safari… tap Install, then keep ForgeSign open."
+                UIApplication.shared.open(page) { [weak self] opened in
                     Task { @MainActor in
                         guard let self else { return }
                         if opened {
-                            self.installStatus = "Install triggered. Accept the iOS prompt and keep ForgeSign open."
+                            self.installStatus = "Safari opened. Tap Install / Accept, and keep ForgeSign in the background."
                         } else {
-                            // Some iOS versions gate direct itms-services opens.
-                            // Open the local install page in Safari instead; it
-                            // redirects into the installer.
-                            self.installStatus = "Opening install page in Safari… tap Install if asked."
-                            if let page = URL(string: "\(base)/install") {
-                                UIApplication.shared.open(page)
+                            // Last resort: try the raw itms-services URL.
+                            self.installStatus = "Safari blocked — trying direct installer…"
+                            if let itmsURL = URL(string: server.itmsServicesURL) {
+                                UIApplication.shared.open(itmsURL)
                             }
                         }
                     }

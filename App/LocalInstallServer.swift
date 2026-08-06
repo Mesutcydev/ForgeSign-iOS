@@ -155,10 +155,13 @@ final class LocalInstallServer: @unchecked Sendable {
         </head>
         <body><div class="bloom b1"></div><div class="bloom b2"></div><div class="card">
         <h1>Installing \(title)…</h1>
-        <p>Accept the prompt to start the install.</p>
-        <a href="\(itmsServicesURL)">Install again</a>
+        <p>If no prompt appears, tap Install below.</p>
+        <a id="install" href="\(itmsServicesURL)">Install</a>
         </div>
-        <script>window.location = "\(itmsServicesURL)";</script>
+        <script>
+        // Prefer assign over location= so Safari keeps a back/retry target.
+        setTimeout(function(){ window.location.assign("\(itmsServicesURL)"); }, 250);
+        </script>
         </body></html>
         """
     }
