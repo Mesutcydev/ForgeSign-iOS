@@ -60,7 +60,7 @@ struct LibraryView: View {
 
     private var header: some View {
         VStack(spacing: 10) {
-            ForgeGlassLogoView(size: 68)
+            ForgeGlassLogoView(size: 60)
 
             Text("Library")
                 .font(T.display(30))

@@ -78,7 +78,7 @@ struct ContentView: View {
 
     private var header: some View {
         VStack(spacing: 10) {
-            ForgeGlassLogoView(size: 68)
+            ForgeGlassLogoView(size: 60)
 
             Text("ForgeSign")
                 .font(T.display(30))
@@ -312,7 +312,7 @@ struct ContentView: View {
                         startInstall()
                     }
                     if install.installServer != nil {
-                        GlassSecondaryButton(label: "Install via Safari", systemImage: "safari") {
+                        GlassSecondaryButton(label: "Retry via Safari", systemImage: "safari") {
                             install.openInstallPage()
                         }
                     }

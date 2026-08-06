@@ -10,7 +10,7 @@ ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ e
 - **Remembered certificates** — imported `.p12` files are validated once and stored on-device (Application Support). The last-used certificate is re-selected automatically.
 - **Certificate insights** — common name, organization and team ID are parsed from the certificate, and a live countdown pill shows remaining validity (`200d left`, amber under 30 days, red when expired).
 - **Keychain passwords** — opt-in password storage in the iOS Keychain (with an encrypted-file fallback when the Keychain is unavailable), so re-signing takes two taps.
-- **Install on device** — semi-local OTA install: the IPA is served over loopback HTTP while a trusted remote HTTPS plist (`api.palera.in`) drives `itms-services`. Safari opens a local install page that redirects into the installer; silent-audio keep-alive keeps large downloads alive in the background.
+- **Install on device** — semi-local OTA install: the IPA is served over loopback HTTP while a trusted remote HTTPS plist (`api.palera.in`) drives `itms-services` directly (Safari is a fallback only). Silent-audio keep-alive keeps large downloads alive in the background.
 - **Library** — a persistent history of every signed app with status (signed / installing / installed / missing), plus reinstall, share and delete actions.
 - **Glass design language** — translucent cards, ambient color blooms, Liquid Glass on iOS 26+ with a material fallback back to iOS 16, light and dark themes.
 
@@ -43,7 +43,7 @@ Only sign and install applications you have the rights to modify. Intended for y
 
 1. Picked files are staged into the app container.
 2. The zsign engine (`Bridge/`) re-signs the Mach-O binaries, injects the profile and rewrites metadata, producing `<name>-signed.ipa` in the persistent Signed library.
-3. Install serves the IPA on `http://127.0.0.1:<port>`, obtains a trusted HTTPS `manifest.plist` from `api.palera.in` that points at that IPA, then hands off to the iOS installer via `itms-services://` (Safari redirect).
+3. Install serves the IPA on `http://127.0.0.1:<port>`, obtains a trusted HTTPS `manifest.plist` from `api.palera.in` that points at that IPA, then opens `itms-services://` directly so iOS prompts to install.
 
 ## Project layout
 

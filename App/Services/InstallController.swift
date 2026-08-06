@@ -1,8 +1,8 @@
 import UIKit
 
-/// Owns the semi-local OTA install flow:
-/// local HTTP IPA server + remote HTTPS plist (`api.palera.in`) + Safari /
-/// itms-services handoff. Shared by the Sign tab and the Library tab.
+/// Owns the semi-local OTA install flow (local HTTP IPA + remote HTTPS
+/// plist via `api.palera.in`). Opens `itms-services` directly for a seamless
+/// install prompt (1.0 behaviour); Safari is the fallback only.
 @MainActor
 final class InstallController: ObservableObject {
     @Published var installServer: LocalInstallServer?
@@ -62,21 +62,26 @@ final class InstallController: ObservableObject {
                                   userInfo: [NSLocalizedDescriptionKey: "Remote manifest server unavailable. Check network and retry."])
                 }
 
-                // Open the local HTTP install page in Safari (no TLS warning).
-                // The page redirects into itms-services with the remote HTTPS plist.
-                guard let page = URL(string: "\(server.installBaseURL)/install") else {
+                // 1.0-style seamless handoff: open itms-services directly so iOS
+                // shows the install prompt in-place. The manifest is remote
+                // HTTPS (api.palera.in) — trusted — while the IPA stays on
+                // local HTTP. Safari is only a fallback if the direct open is
+                // gated.
+                guard let itmsURL = URL(string: server.itmsServicesURL) else {
                     throw NSError(domain: "forgesign.install", code: 4,
-                                  userInfo: [NSLocalizedDescriptionKey: "Bad install page URL."])
+                                  userInfo: [NSLocalizedDescriptionKey: "Bad itms-services URL."])
                 }
-                installStatus = "Opening Safari… tap Install, keep ForgeSign open."
-                UIApplication.shared.open(page) { [weak self] opened in
+                installStatus = "Triggering installer…"
+                UIApplication.shared.open(itmsURL) { [weak self] opened in
                     Task { @MainActor in
                         guard let self else { return }
                         if opened {
-                            self.installStatus = "Safari opened. Tap Install / Accept, keep ForgeSign in the background."
-                        } else if let itmsURL = URL(string: server.itmsServicesURL) {
-                            self.installStatus = "Opening installer directly…"
-                            UIApplication.shared.open(itmsURL)
+                            self.installStatus = "Install prompted. Accept the iOS dialog and keep ForgeSign open."
+                        } else {
+                            self.installStatus = "Direct open gated — opening Safari install page…"
+                            if let page = URL(string: "\(server.installBaseURL)/install") {
+                                UIApplication.shared.open(page)
+                            }
                         }
                     }
                 }
