@@ -1,133 +1,244 @@
 import Foundation
-import Network
 import Darwin
+import os
 
-/// A minimal local HTTPS server that serves a signed IPA plus an `itms-services`
-/// manifest so iOS will install the app directly on-device.
+/// Local OTA install server (semi-local, Feather-style).
 ///
-/// iOS OTA installation refuses plain-HTTP manifests (since iOS 7.1), so this
-/// listener runs TLS using the embedded `*.backloop.dev` identity. That domain
-/// resolves to 127.0.0.1, and its certificate is signed by Let's Encrypt, so
-/// the system installer can fetch `https://install.backloop.dev:<port>/...`
-/// straight from this app with a trusted handshake.
+/// `itms-services` requires an HTTPS manifest URL that iOS trusts. The public
+/// `*.backloop.dev` leaf is now issued under Let's Encrypt YR1 / ISRG Root YR,
+/// which Apple's trust store does not include — Safari shows "This Connection
+/// Is Not Private". Instead we:
 ///
-/// Flow: ForgeSign signs the IPA, starts this server, then opens
-/// `itms-services://?action=download-manifest&url=https://install.backloop.dev:<port>/manifest.plist`.
+/// 1. Serve the IPA over plain HTTP on `127.0.0.1` (loopback; no cert needed).
+/// 2. Point `itms-services` at a remote HTTPS plist from `api.palera.in`
+///    (`genPlist`) whose `software-package` URL is our local IPA.
+///
+/// Same approach Feather uses for its "semi-local" / server-method-1 install.
 final class LocalInstallServer: @unchecked Sendable {
-    private var listener: NWListener?
-    private let queue = DispatchQueue(label: "forgesign.installserver")
-    private(set) var port: UInt16 = 0
+    private struct State {
+        var listenerFD: Int32 = -1
+        var running = false
+        var port: UInt16 = 0
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
 
     private var ipaURL: URL?
     private var bundleId = ""
     private var bundleVersion = "1.0"
     private var title = "App"
 
-    /// Base URL (scheme+host+port) the installer uses to reach this server.
-    /// The hostname is covered by the embedded certificate and resolves to
-    /// 127.0.0.1, i.e. this very app's listener.
+    /// Local loopback base (plain HTTP). Used for the IPA and the Safari
+    /// handoff page — never for the itms-services manifest URL.
     var installBaseURL: String {
-        "https://\(InstallCertificate.hostname):\(port)"
+        "http://127.0.0.1:\(port)"
     }
 
-    var manifestURL: String {
-        "\(installBaseURL)/manifest.plist"
+    var payloadURL: String {
+        "\(installBaseURL)/app.ipa"
     }
 
-    /// Starts the server and returns the bound port.
+    /// Trusted HTTPS manifest URL (plistserver). This is what itms-services
+    /// actually fetches.
+    var remoteManifestURL: String {
+        var comps = URLComponents(string: "https://api.palera.in/genPlist")!
+        comps.queryItems = [
+            URLQueryItem(name: "bundleid", value: bundleId),
+            URLQueryItem(name: "name", value: title),
+            URLQueryItem(name: "version", value: bundleVersion),
+            URLQueryItem(name: "fetchurl", value: payloadURL),
+        ]
+        return comps.url?.absoluteString ?? "https://api.palera.in/genPlist"
+    }
+
+    var port: UInt16 {
+        state.withLock { $0.port }
+    }
+
+    /// Starts the loopback HTTP server and returns the bound port.
     func start(ipa: URL, bundleId: String, bundleVersion: String, title: String) async throws -> UInt16 {
         self.ipaURL = ipa
         self.bundleId = bundleId
         self.bundleVersion = bundleVersion.isEmpty ? "1.0" : bundleVersion
-        self.title = title
+        self.title = title.isEmpty ? "App" : title
 
-        // iOS only installs from HTTPS sources; without the TLS identity we
-        // cannot serve one, so fail loudly instead of falling back to HTTP.
-        guard let params = InstallCertificate.tlsParameters() else {
-            throw NWError.posix(.EINVAL)
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: nil)
         }
-        params.allowLocalEndpointReuse = true
-        let l = try NWListener(using: params, on: .any)
-        self.listener = l
-        l.newConnectionHandler = { [weak self] conn in self?.handle(conn) }
 
-        let q = queue
-        let boundPort: UInt16 = try await withCheckedThrowingContinuation { cont in
-            l.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    cont.resume(returning: l.port?.rawValue ?? 0)
-                case .failed(let error):
-                    cont.resume(throwing: error)
-                default:
-                    break
-                }
+        var reuse: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
+        var noSigPipe: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+
+        var addr = sockaddr_in()
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+
+        let bindResult = withUnsafePointer(to: &addr) { ptr -> Int32 in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
             }
-            l.start(queue: q)
         }
-        self.port = boundPort
+        guard bindResult == 0 else {
+            let err = errno
+            close(fd)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err), userInfo: nil)
+        }
+        guard listen(fd, 8) == 0 else {
+            let err = errno
+            close(fd)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err), userInfo: nil)
+        }
+
+        var boundAddr = sockaddr_in()
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        guard getsockname(fd, withUnsafeMutablePointer(to: &boundAddr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 }
+        }, &len) == 0 else {
+            let err = errno
+            close(fd)
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err), userInfo: nil)
+        }
+        let boundPort = UInt16(boundAddr.sin_port.bigEndian)
+
+        state.withLock {
+            $0.listenerFD = fd
+            $0.port = boundPort
+            $0.running = true
+        }
+
+        let t = Thread { [weak self] in self?.acceptLoop(fd) }
+        t.name = "forgesign.installserver"
+        t.start()
+
         return boundPort
     }
 
     func stop() {
-        listener?.cancel()
-        listener = nil
+        let fd = state.withLock { state -> Int32 in
+            state.running = false
+            let fd = state.listenerFD
+            state.listenerFD = -1
+            return fd
+        }
+        if fd >= 0 { close(fd) }
     }
 
-    // MARK: Connection handling
+    // MARK: Accept loop
 
-    private func handle(_ conn: NWConnection) {
-        conn.start(queue: queue)
-        receiveRequest(conn, buffer: Data())
-    }
+    private func acceptLoop(_ fd: Int32) {
+        while true {
+            let shouldRun = state.withLock { $0.running }
+            guard shouldRun else { break }
 
-    private func receiveRequest(_ conn: NWConnection, buffer: Data) {
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            guard let self else { return }
-            var buf = buffer
-            if let data { buf.append(data) }
-            if let range = buf.range(of: Data("\r\n\r\n".utf8)) {
-                let headerData = buf.subdata(in: 0..<range.lowerBound)
-                let request = String(data: headerData, encoding: .utf8) ?? ""
-                self.respond(conn, request: request)
-            } else if isComplete || error != nil {
-                conn.cancel()
+            let client = accept(fd, nil, nil)
+            if client >= 0 {
+                handleConnection(client)
             } else {
-                self.receiveRequest(conn, buffer: buf)
+                Thread.sleep(forTimeInterval: 0.05)
             }
         }
     }
 
-    private func respond(_ conn: NWConnection, request: String) {
+    private func handleConnection(_ fd: Int32) {
+        defer { close(fd) }
+
+        var buffer = Data()
+        var raw = [UInt8](repeating: 0, count: 4096)
+        while buffer.count < 64 * 1024 {
+            let n = recv(fd, &raw, raw.count, 0)
+            if n <= 0 { return }
+            buffer.append(contentsOf: raw[0..<n])
+            if buffer.range(of: Data("\r\n\r\n".utf8)) != nil { break }
+        }
+        guard let headerRange = buffer.range(of: Data("\r\n\r\n".utf8)),
+              let request = String(data: buffer.subdata(in: 0..<headerRange.lowerBound), encoding: .utf8) else {
+            return
+        }
+
         let lines = request.split(separator: "\r\n").map(String.init)
         let firstLine = lines.first ?? ""
         let parts = firstLine.split(separator: " ").map(String.init)
         let method = parts.first ?? "GET"
         let path = parts.count > 1 ? parts[1] : "/"
+        let headOnly = method == "HEAD"
 
-        if path.hasPrefix("/manifest.plist") {
-            send(conn, status: "200 OK", contentType: "application/xml", body: manifestData(), headOnly: method == "HEAD")
-        } else if path.hasPrefix("/app.ipa") {
+        if path.hasPrefix("/app.ipa") {
             if let ipa = ipaURL, FileManager.default.fileExists(atPath: ipa.path) {
-                sendFile(conn, url: ipa, headOnly: method == "HEAD")
+                sendFile(fd, url: ipa, headOnly: headOnly)
             } else {
-                send(conn, status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8), headOnly: false)
+                sendResponse(fd, status: "404 Not Found", contentType: "text/plain",
+                             body: Data("not found".utf8), headOnly: false)
             }
         } else if path.hasPrefix("/install") {
-            // Fallback for iOS versions where opening itms-services:// directly
-            // from an app is gated: Safari lands here and is redirected into
-            // the installer by the script below.
-            send(conn, status: "200 OK", contentType: "text/html", body: Data(installPage().utf8), headOnly: false)
+            sendResponse(fd, status: "200 OK", contentType: "text/html",
+                         body: Data(installPage().utf8), headOnly: false)
+        } else if path.hasPrefix("/health") {
+            sendResponse(fd, status: "200 OK", contentType: "text/plain",
+                         body: Data("ok".utf8), headOnly: headOnly)
         } else {
-            send(conn, status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8), headOnly: false)
+            sendResponse(fd, status: "404 Not Found", contentType: "text/plain",
+                         body: Data("not found".utf8), headOnly: false)
         }
     }
 
-    /// Called on the server queue after the IPA has been fully streamed.
     var onIPADelivered: (() -> Void)?
 
+    private func sendAll(_ fd: Int32, _ data: Data) {
+        var sent = 0
+        data.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            while sent < data.count {
+                let n = send(fd, base.advanced(by: sent), data.count - sent, 0)
+                if n <= 0 { return }
+                sent += n
+            }
+        }
+    }
+
+    private func sendResponse(_ fd: Int32, status: String, contentType: String, body: Data, headOnly: Bool) {
+        var header = "HTTP/1.1 \(status)\r\n"
+        header += "Content-Type: \(contentType)\r\n"
+        header += "Content-Length: \(body.count)\r\n"
+        header += "Connection: close\r\n\r\n"
+        var response = Data(header.utf8)
+        if !headOnly { response.append(body) }
+        sendAll(fd, response)
+    }
+
+    private func sendFile(_ fd: Int32, url: URL, headOnly: Bool) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            sendResponse(fd, status: "404 Not Found", contentType: "text/plain", body: Data(), headOnly: false)
+            return
+        }
+        let fileSize = handle.seekToEndOfFile()
+        handle.seek(toFileOffset: 0)
+        var header = "HTTP/1.1 200 OK\r\n"
+        header += "Content-Type: application/octet-stream\r\n"
+        header += "Content-Length: \(fileSize)\r\n"
+        header += "Connection: close\r\n\r\n"
+        sendAll(fd, Data(header.utf8))
+        if headOnly {
+            try? handle.close()
+            return
+        }
+        while true {
+            let chunk = handle.readData(ofLength: 1024 * 1024)
+            if chunk.isEmpty { break }
+            sendAll(fd, chunk)
+        }
+        try? handle.close()
+        onIPADelivered?()
+    }
+
+    /// Safari-facing page. Redirects into itms-services with the *remote*
+    /// HTTPS plist URL (never a local TLS URL).
     private func installPage() -> String {
-        """
+        let itms = itmsServicesURL
+        return """
         <!DOCTYPE html>
         <html>
         <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -155,114 +266,21 @@ final class LocalInstallServer: @unchecked Sendable {
         </head>
         <body><div class="bloom b1"></div><div class="bloom b2"></div><div class="card">
         <h1>Installing \(title)…</h1>
-        <p>If no prompt appears, tap Install below.</p>
-        <a id="install" href="\(itmsServicesURL)">Install</a>
+        <p>If no prompt appears, tap Install below. Keep ForgeSign open.</p>
+        <a id="install" href="\(itms)">Install</a>
         </div>
-        <script>
-        // Prefer assign over location= so Safari keeps a back/retry target.
-        setTimeout(function(){ window.location.assign("\(itmsServicesURL)"); }, 250);
-        </script>
+        <script>setTimeout(function(){ window.location.assign("\(itms)"); }, 250);</script>
         </body></html>
         """
     }
 
     var itmsServicesURL: String {
-        let manifest = "\(installBaseURL)/manifest.plist"
-        // Keep the URL readable (like Feather does) while still escaping any
-        // character that would break the outer query string.
+        // Encode the entire HTTPS plist URL for the itms-services query value
+        // (same encoding Feather uses for its external/semi-local link).
         var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._~/:")
-        let encoded = manifest.addingPercentEncoding(withAllowedCharacters: allowed) ?? manifest
+        allowed.insert(charactersIn: "-._~")
+        let encoded = remoteManifestURL.addingPercentEncoding(withAllowedCharacters: allowed)
+            ?? remoteManifestURL
         return "itms-services://?action=download-manifest&url=\(encoded)"
-    }
-
-    private func send(_ conn: NWConnection, status: String, contentType: String, body: Data, headOnly: Bool) {
-        var header = "HTTP/1.1 \(status)\r\n"
-        header += "Content-Type: \(contentType)\r\n"
-        header += "Content-Length: \(body.count)\r\n"
-        header += "Connection: close\r\n\r\n"
-        var response = Data(header.utf8)
-        if !headOnly { response.append(body) }
-        conn.send(content: response, completion: .contentProcessed { _ in
-            conn.cancel()
-        })
-    }
-
-    private func sendFile(_ conn: NWConnection, url: URL, headOnly: Bool) {
-        guard let handle = try? FileHandle(forReadingFrom: url) else {
-            send(conn, status: "404 Not Found", contentType: "text/plain", body: Data(), headOnly: false)
-            return
-        }
-        let fileSize = handle.seekToEndOfFile()
-        handle.seek(toFileOffset: 0)
-        var header = "HTTP/1.1 200 OK\r\n"
-        header += "Content-Type: application/octet-stream\r\n"
-        header += "Content-Length: \(fileSize)\r\n"
-        header += "Connection: close\r\n\r\n"
-        conn.send(content: Data(header.utf8), completion: .contentProcessed { [weak self] _ in
-            if headOnly {
-                try? handle.close()
-                conn.cancel()
-            } else {
-                self?.sendChunks(conn, handle: handle)
-            }
-        })
-    }
-
-    private func sendChunks(_ conn: NWConnection, handle: FileHandle) {
-        let chunk = handle.readData(ofLength: 1024 * 1024)
-        if chunk.isEmpty {
-            try? handle.close()
-            // Give the TLS stack a moment to flush the final records and
-            // close_notify before tearing the connection down.
-            queue.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-                conn.cancel()
-                self?.onIPADelivered?()
-            }
-            return
-        }
-        conn.send(content: chunk, completion: .contentProcessed { [weak self] _ in
-            self?.sendChunks(conn, handle: handle)
-        })
-    }
-
-    // MARK: Manifest
-
-    private func manifestData() -> Data {
-        let ipaURLString = "\(installBaseURL)/app.ipa"
-        let manifest = """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-            <key>items</key>
-            <array>
-                <dict>
-                    <key>assets</key>
-                    <array>
-                        <dict>
-                            <key>kind</key>
-                            <string>software-package</string>
-                            <key>url</key>
-                            <string>\(ipaURLString)</string>
-                        </dict>
-                    </array>
-                    <key>metadata</key>
-                    <dict>
-                        <key>bundle-identifier</key>
-                        <string>\(bundleId)</string>
-                        <key>bundle-version</key>
-                        <string>\(bundleVersion)</string>
-                        <key>kind</key>
-                        <string>software</string>
-                        <key>title</key>
-                        <string>\(title)</string>
-                    </dict>
-                </dict>
-            </array>
-        </dict>
-        </plist>
-        """
-        return Data(manifest.utf8)
     }
 }

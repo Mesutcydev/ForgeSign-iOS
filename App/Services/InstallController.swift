@@ -1,7 +1,8 @@
 import UIKit
 
-/// Owns the local OTA install flow (loopback HTTPS server + itms-services
-/// handoff). Shared by the Sign tab and the Library tab.
+/// Owns the semi-local OTA install flow:
+/// local HTTP IPA server + remote HTTPS plist (`api.palera.in`) + Safari /
+/// itms-services handoff. Shared by the Sign tab and the Library tab.
 @MainActor
 final class InstallController: ObservableObject {
     @Published var installServer: LocalInstallServer?
@@ -39,48 +40,47 @@ final class InstallController: ObservableObject {
                     }
                 }
 
-                // Best-effort self-check. URLSession and the iOS OTA installer
-                // use different TLS stacks — a URLSession failure here must not
-                // abort the install (that was masking a working itms-services
-                // handoff with "A TLS error caused the secure connection to fail").
-                let base = server.installBaseURL
-                if let checkURL = URL(string: "\(base)/manifest.plist") {
-                    do {
-                        let (_, resp) = try await URLSession.shared.data(from: checkURL)
-                        if (resp as? HTTPURLResponse)?.statusCode != 200 {
-                            installStatus = "Local server self-check returned a non-200; trying installer anyway…"
-                        }
-                    } catch {
-                        installStatus = "Self-check skipped (\(error.localizedDescription)). Triggering installer…"
-                    }
+                // Confirm the local IPA endpoint answers before handing off.
+                let health = URL(string: "\(server.installBaseURL)/health")!
+                let (_, healthResp) = try await URLSession.shared.data(from: health)
+                guard (healthResp as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw NSError(domain: "forgesign.install", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey: "Local install server failed self-check."])
                 }
 
-                // On iOS 18+, UIApplication.open(itms-services://) often returns
-                // success without ever showing the install prompt (no entitlement).
-                // Always hand off through Safari: the local /install page redirects
-                // into itms-services, which is the path Feather and other on-device
-                // installers rely on.
-                guard let page = URL(string: "\(base)/install") else {
+                // Confirm the remote HTTPS plist resolves (this is what iOS
+                // actually fetches — must be trusted public HTTPS).
+                guard let plistURL = URL(string: server.remoteManifestURL) else {
                     throw NSError(domain: "forgesign.install", code: 2,
+                                  userInfo: [NSLocalizedDescriptionKey: "Bad remote manifest URL."])
+                }
+                let (plistData, plistResp) = try await URLSession.shared.data(from: plistURL)
+                guard (plistResp as? HTTPURLResponse)?.statusCode == 200,
+                      let plistText = String(data: plistData, encoding: .utf8),
+                      plistText.contains("software-package") else {
+                    throw NSError(domain: "forgesign.install", code: 3,
+                                  userInfo: [NSLocalizedDescriptionKey: "Remote manifest server unavailable. Check network and retry."])
+                }
+
+                // Open the local HTTP install page in Safari (no TLS warning).
+                // The page redirects into itms-services with the remote HTTPS plist.
+                guard let page = URL(string: "\(server.installBaseURL)/install") else {
+                    throw NSError(domain: "forgesign.install", code: 4,
                                   userInfo: [NSLocalizedDescriptionKey: "Bad install page URL."])
                 }
-                installStatus = "Opening Safari… tap Install, then keep ForgeSign open."
+                installStatus = "Opening Safari… tap Install, keep ForgeSign open."
                 UIApplication.shared.open(page) { [weak self] opened in
                     Task { @MainActor in
                         guard let self else { return }
                         if opened {
-                            self.installStatus = "Safari opened. Tap Install / Accept, and keep ForgeSign in the background."
-                        } else {
-                            // Last resort: try the raw itms-services URL.
-                            self.installStatus = "Safari blocked — trying direct installer…"
-                            if let itmsURL = URL(string: server.itmsServicesURL) {
-                                UIApplication.shared.open(itmsURL)
-                            }
+                            self.installStatus = "Safari opened. Tap Install / Accept, keep ForgeSign in the background."
+                        } else if let itmsURL = URL(string: server.itmsServicesURL) {
+                            self.installStatus = "Opening installer directly…"
+                            UIApplication.shared.open(itmsURL)
                         }
                     }
                 }
-                // Hold background execution while the download is in flight;
-                // the keep-alive stops itself once the IPA has been delivered.
+
                 try? await Task.sleep(nanoseconds: 30 * 60 * 1_000_000_000)
             } catch {
                 installStatus = "Install failed: \(error.localizedDescription)"
@@ -95,9 +95,7 @@ final class InstallController: ObservableObject {
         }
     }
 
-    /// Opens the local HTTPS install page in Safari. Used when iOS declines the
-    /// direct `itms-services://` open (gated on newer iOS versions without the
-    /// required entitlements); the page itself redirects into the installer.
+    /// Re-opens the local HTTP install page in Safari.
     func openInstallPage() {
         guard let server = installServer else { return }
         guard let page = URL(string: "\(server.installBaseURL)/install") else { return }
