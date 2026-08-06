@@ -1,10 +1,38 @@
 import SwiftUI
 
-/// ForgeSign glass theme — color palette and typography.
+// MARK: - Color extensions for Adaptive & Hex parsing (from SiteAgent)
+
+extension Color {
+    init(hex: String) {
+        let s = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# "))
+        var v: UInt64 = 0
+        guard !s.isEmpty, Scanner(string: s).scanHexInt64(&v) else {
+            self = .clear
+            return
+        }
+        self.init(
+            red:   Double((v >> 16) & 0xFF) / 255,
+            green: Double((v >> 8) & 0xFF) / 255,
+            blue:  Double(v & 0xFF) / 255
+        )
+    }
+
+    init(hex: UInt32, alpha: Double = 1) {
+        self = Color(hex: String(format: "%06X", hex)).opacity(alpha)
+    }
+
+    init(light: String, dark: String) {
+        self = Color(UIColor { trait in
+            UIColor(Color(hex: trait.userInterfaceStyle == .dark ? dark : light))
+        })
+    }
+}
+
+/// ForgeSign Colorless Glass theme — light and dark palettes.
 ///
-/// Visual language ported from the CodeLens "clear glass" design system:
-/// Apple clear glass, neutral content, color reserved for state or a
-/// primary action. Values match the reference light/dark palettes.
+/// Ported from SiteAgent's colorless glass design system: untinted clear
+/// Liquid Glass surfaces over an ambient backdrop, neutral high-contrast ink,
+/// and adaptive colorless control tints in both light and dark modes.
 struct ForgeTheme {
     // Background layers
     let bg: Color           // page background
@@ -16,13 +44,13 @@ struct ForgeTheme {
     let ink: Color          // primary
     let ink2: Color         // secondary
     let ink3: Color         // tertiary / labels
-    let ink4: Color         // disabled / very subtle
+    let ink4: Color         // disabled / subtle
 
     // Borders
     let rule: Color         // hairline
     let rule2: Color        // stronger
 
-    // Brand
+    // Brand / Neutral Accent
     let accent: Color
     let accentSoft: Color
     let accentSofter: Color
@@ -32,46 +60,47 @@ struct ForgeTheme {
     let warn: Color
     let bad: Color
 
-    // Spacing
+    // Layout Spacing
     let pad: CGFloat
     let gap: CGFloat
 
     let isDark: Bool
 
-    // Accent gradient anchors (primary CTA, active states)
+    // Accent gradient anchors
     let accentHi: Color
     let accentDeep: Color
     let accentStrong: Color
 }
 
 extension ForgeTheme {
+    /// Colorless Glass Light Theme
     static let light = ForgeTheme(
-        bg:        Color(red: 0.968, green: 0.976, blue: 0.992),  // airy pearl canvas
+        bg:        Color(.systemGroupedBackground),
         surface:   Color.white.opacity(0.26),
         surface2:  Color.white.opacity(0.18),
         surface3:  Color.white.opacity(0.10),
-        ink:       Color(red: 0.110, green: 0.110, blue: 0.118),  // #1C1C1E label
-        ink2:      Color(red: 0.427, green: 0.427, blue: 0.447),  // #6D6D72 secondary
-        ink3:      Color(red: 0.557, green: 0.557, blue: 0.576),  // #8E8E93 tertiary
-        ink4:      Color(red: 0.780, green: 0.780, blue: 0.800),  // #C7C7CC quaternary
-        rule:      Color.black.opacity(0.10),
-        rule2:     Color.black.opacity(0.18),
-        accent:    Color(red: 0.000, green: 0.478, blue: 1.000),
-        accentSoft:   Color(red: 0.000, green: 0.478, blue: 1.000).opacity(0.10),
-        accentSofter: Color(red: 0.000, green: 0.478, blue: 1.000).opacity(0.06),
+        ink:       Color(red: 0.110, green: 0.110, blue: 0.118),  // #1C1C1E
+        ink2:      Color(red: 0.427, green: 0.427, blue: 0.447),  // #6D6D72
+        ink3:      Color(red: 0.557, green: 0.557, blue: 0.576),  // #8E8E93
+        ink4:      Color(red: 0.780, green: 0.780, blue: 0.800),  // #C7C7CC
+        rule:      Color.black.opacity(0.08),
+        rule2:     Color.black.opacity(0.16),
+        accent:    Color(hex: "4A5058"),
+        accentSoft:   Color(hex: "4A5058").opacity(0.10),
+        accentSofter: Color(hex: "4A5058").opacity(0.06),
         good:      Color(red: 0.133, green: 0.545, blue: 0.302),
         warn:      Color(red: 0.690, green: 0.424, blue: 0.047),
         bad:       Color(red: 0.784, green: 0.118, blue: 0.196),
         pad: 16, gap: 10,
         isDark: false,
-        accentHi:     Color(red: 0.200, green: 0.560, blue: 1.000),
-        accentDeep:   Color(red: 0.000, green: 0.330, blue: 0.780),
-        accentStrong: Color(red: 0.000, green: 0.400, blue: 0.900)
+        accentHi:     Color(hex: "626B76"),
+        accentDeep:   Color(hex: "343940"),
+        accentStrong: Color(hex: "4A5058")
     )
 
+    /// Colorless Glass Dark Theme
     static let dark = ForgeTheme(
-        // Lift the canvas above black so clear glass reads as smoked crystal
-        bg:        Color(red: 0.140, green: 0.155, blue: 0.190),
+        bg:        Color(.systemGroupedBackground),
         surface:   Color.white.opacity(0.13),
         surface2:  Color.white.opacity(0.18),
         surface3:  Color.white.opacity(0.08),
@@ -79,43 +108,48 @@ extension ForgeTheme {
         ink2:      Color(red: 0.706, green: 0.706, blue: 0.729),
         ink3:      Color(red: 0.510, green: 0.510, blue: 0.533),
         ink4:      Color(red: 0.337, green: 0.337, blue: 0.357),
-        rule:      Color.white.opacity(0.15),
-        rule2:     Color.white.opacity(0.25),
-        accent:    Color(red: 0.220, green: 0.600, blue: 1.000),
-        accentSoft:   Color(red: 0.220, green: 0.600, blue: 1.000).opacity(0.16),
-        accentSofter: Color(red: 0.220, green: 0.600, blue: 1.000).opacity(0.09),
+        rule:      Color.white.opacity(0.12),
+        rule2:     Color.white.opacity(0.22),
+        accent:    Color(hex: "D7DCE3"),
+        accentSoft:   Color(hex: "D7DCE3").opacity(0.16),
+        accentSofter: Color(hex: "D7DCE3").opacity(0.09),
         good:      Color(red: 0.392, green: 0.784, blue: 0.533),
         warn:      Color(red: 0.898, green: 0.643, blue: 0.263),
         bad:       Color(red: 0.902, green: 0.404, blue: 0.431),
         pad: 16, gap: 10,
         isDark: true,
-        accentHi:     Color(red: 0.360, green: 0.660, blue: 1.000),
-        accentDeep:   Color(red: 0.040, green: 0.450, blue: 0.920),
-        accentStrong: Color(red: 0.220, green: 0.600, blue: 1.000)
+        accentHi:     Color(hex: "E2E7ED"),
+        accentDeep:   Color(hex: "8A939E"),
+        accentStrong: Color(hex: "D7DCE3")
     )
+
+    /// Tint for control icons & interactive elements in colorless mode.
+    var controlTint: Color {
+        isDark ? Color(hex: "D7DCE3") : Color(hex: "4A5058")
+    }
 
     var accentStrongSoft: Color { accentStrong.opacity(isDark ? 0.18 : 0.12) }
 
     /// Quiet supporting glyph color.
     var accent2: Color {
-        isDark ? Color(red: 0.620, green: 0.650, blue: 0.700)
-               : Color(red: 0.430, green: 0.460, blue: 0.520)
+        isDark ? Color(hex: "D7DCE3") : Color(hex: "4A5058")
     }
 }
 
 // MARK: - Typography
 
 extension ForgeTheme {
-    /// Display / sans body.
+    /// Display / SF Rounded heading.
     func display(_ size: CGFloat, _ weight: Font.Weight = .semibold) -> Font {
-        .system(size: size, weight: weight, design: .default)
+        .system(size: size, weight: weight, design: .rounded)
     }
 
+    /// Sans body typography.
     func sans(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight, design: .default)
     }
 
-    /// Monospaced — pervasive in this design language (values, badges, labels).
+    /// Monospaced — pervasive for values, badges, and labels.
     func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
         .system(size: size, weight: weight, design: .monospaced)
     }
@@ -139,7 +173,6 @@ extension View {
         self.environment(\.forgeTheme, theme)
     }
 
-    /// Allows up to `.accessibility2` so the design doesn't blow up.
     func forgeScaledType() -> some View {
         self.dynamicTypeSize(...DynamicTypeSize.accessibility2)
     }

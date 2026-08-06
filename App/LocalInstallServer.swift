@@ -2,17 +2,22 @@ import Foundation
 import Network
 import Darwin
 
-/// A minimal local HTTPS server that serves a signed IPA plus an `itms-services`
+/// A minimal local HTTP server that serves a signed IPA plus an `itms-services`
 /// manifest so iOS will install the app directly on-device.
 ///
-/// iOS OTA installation refuses plain-HTTP manifests (since iOS 7.1), so this
-/// listener runs TLS using the embedded `*.backloop.dev` identity. That domain
-/// resolves to 127.0.0.1, and its certificate is signed by Let's Encrypt, so
-/// the system installer can fetch `https://install.backloop.dev:<port>/...`
-/// straight from this app with a trusted handshake.
+/// iOS OTA installation normally requires HTTPS manifests, but it accepts
+/// plain HTTP for localhost — the same loopback behaviour the App Store /
+/// AltStore-type installers rely on. The manifest and IPA are therefore served
+/// as `http://127.0.0.1:<port>/...` on this app's own loopback address.
+///
+/// NOTE on TLS: the previous implementation served these over HTTPS using the
+/// embedded `*.backloop.dev` identity. That certificate now chains to Let's
+/// Encrypt's new `ISRG Root YR` root, which older iOS trust stores do not
+/// include, so the installer aborted the manifest fetch with a TLS error. Plain
+/// loopback HTTP has no certificate-dependency and works on every iOS version.
 ///
 /// Flow: ForgeSign signs the IPA, starts this server, then opens
-/// `itms-services://?action=download-manifest&url=https://install.backloop.dev:<port>/manifest.plist`.
+/// `itms-services://?action=download-manifest&url=http://127.0.0.1:<port>/manifest.plist`.
 final class LocalInstallServer: @unchecked Sendable {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "forgesign.installserver")
@@ -24,10 +29,10 @@ final class LocalInstallServer: @unchecked Sendable {
     private var title = "App"
 
     /// Base URL (scheme+host+port) the installer uses to reach this server.
-    /// The hostname is covered by the embedded certificate and resolves to
-    /// 127.0.0.1, i.e. this very app's listener.
+    /// The manifest and IPA are served over loopback plain HTTP so the fetch
+    /// carries no TLS/trust dependency (see the header for why that matters).
     var installBaseURL: String {
-        "https://\(InstallCertificate.hostname):\(port)"
+        "http://127.0.0.1:\(port)"
     }
 
     var manifestURL: String {
@@ -41,11 +46,9 @@ final class LocalInstallServer: @unchecked Sendable {
         self.bundleVersion = bundleVersion.isEmpty ? "1.0" : bundleVersion
         self.title = title
 
-        // iOS only installs from HTTPS sources; without the TLS identity we
-        // cannot serve one, so fail loudly instead of falling back to HTTP.
-        guard let params = InstallCertificate.tlsParameters() else {
-            throw NWError.posix(.EINVAL)
-        }
+        // Loopback HTTP, mirroring the on-device installer behaviour of
+        // AltStore-class tools. No TLS handshake, no trust anchors to fail.
+        let params = NWParameters()
         params.allowLocalEndpointReuse = true
         let l = try NWListener(using: params, on: .any)
         self.listener = l

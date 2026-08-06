@@ -5,12 +5,12 @@ struct ContentView: View {
     @StateObject private var signer = SigningService()
 
     @EnvironmentObject private var certStore: CertificateStore
+    @EnvironmentObject private var profileStore: ProfileStore
     @EnvironmentObject private var history: HistoryStore
     @EnvironmentObject private var install: InstallController
     @Environment(\.forgeTheme) private var T
 
     @State private var ipaURL: URL?
-    @State private var profileURL: URL?
     @State private var password = ""
     @State private var bundleId = ""
     @State private var removeExtensions = false
@@ -20,7 +20,7 @@ struct ContentView: View {
     @State private var signedVersion = "1.0"
     @State private var lastRecordID: UUID?
     @State private var showIPAImporter = false
-    @State private var showProfileImporter = false
+    @State private var showProfileSheet = false
     @State private var showCertSheet = false
     @State private var showShare = false
 
@@ -56,8 +56,8 @@ struct ContentView: View {
                 .fileImporter(isPresented: $showIPAImporter, allowedContentTypes: [.zip, UTType(filenameExtension: "ipa") ?? .zip]) { result in
                     if case .success(let url) = result { ipaURL = signer.stage(url) }
                 }
-                .fileImporter(isPresented: $showProfileImporter, allowedContentTypes: [UTType(filenameExtension: "mobileprovision") ?? .data]) { result in
-                    if case .success(let url) = result { profileURL = signer.stage(url) }
+                .sheet(isPresented: $showProfileSheet) {
+                    ProfilesSheet()
                 }
                 .sheet(isPresented: $showCertSheet) {
                     CertificatesSheet()
@@ -78,15 +78,7 @@ struct ContentView: View {
 
     private var header: some View {
         VStack(spacing: 10) {
-            Image(systemName: "signature")
-                .font(.system(size: 24, weight: .medium))
-                .foregroundColor(T.accentStrong)
-                .frame(width: 60, height: 60)
-                .fClearGlass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(T.rule, lineWidth: AppStroke.hairline)
-                }
+            ForgeGlassLogoView(size: 68)
 
             Text("ForgeSign")
                 .font(T.display(30))
@@ -106,7 +98,7 @@ struct ContentView: View {
             GlassRowDivider()
             certificateRow
             GlassRowDivider()
-            GlassFileRow(icon: "checkmark.seal.fill", label: "Profile", file: profileURL) { showProfileImporter = true }
+            profileRow
             GlassRowDivider()
             if let cert = certStore.selected, certStore.savedPassword(for: cert) != nil {
                 GlassRow(label: "P12 password") {
@@ -159,6 +151,42 @@ struct ContentView: View {
         .buttonStyle(GlassTactileButtonStyle())
     }
 
+    private var profileRow: some View {
+        Button {
+            showProfileSheet = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(T.accent2)
+                    .frame(width: 22)
+                Text("Profile (.mobileprovision)").font(T.sans(15)).foregroundColor(T.ink)
+                Spacer(minLength: 8)
+                if let profile = profileStore.selected {
+                    let expiry = P12Inspector.expiry(profile.notAfter)
+                    GlassStatusPill(text: expiry.text, color: expiry.tone.color(in: T))
+                    Text(profile.displayName)
+                        .font(T.mono(12))
+                        .foregroundColor(T.ink2)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 130, alignment: .trailing)
+                } else {
+                    Text("Choose…")
+                        .font(T.sans(13))
+                        .foregroundColor(T.ink3)
+                }
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(T.ink4)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(GlassTactileButtonStyle())
+    }
+
     // MARK: - Options
 
     private var optionsSection: some View {
@@ -187,19 +215,15 @@ struct ContentView: View {
                     Text("Sign IPA").font(T.sans(15, .semibold))
                 }
             }
-            .foregroundColor(.white)
+            .foregroundColor(T.isDark ? .white : T.ink)
             .padding(.horizontal, 14)
             .frame(height: 50)
             .frame(maxWidth: .infinity)
-            .background {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(LinearGradient(
-                        colors: [T.accentHi, T.accentStrong],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ))
+            .glassSurface(.button)
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(T.rule2, lineWidth: AppStroke.hairline)
             }
-            .shadow(color: T.accent.opacity(0.28), radius: 8, y: 2)
             .shimmer(isActive: signing)
             .opacity(!canSign || signing ? 0.45 : 1)
         }
@@ -311,15 +335,16 @@ struct ContentView: View {
     }
 
     private var canSign: Bool {
-        ipaURL != nil && certStore.selected != nil && profileURL != nil && effectivePassword != nil
+        ipaURL != nil && certStore.selected != nil && profileStore.selected != nil && effectivePassword != nil
     }
 
     private func sign() {
         guard let ipa = ipaURL,
               let cert = certStore.selected,
               let pw = effectivePassword,
-              let profile = profileURL else { return }
+              let profile = profileStore.selected else { return }
         let p12 = certStore.fileURL(for: cert)
+        let profileFile = profileStore.fileURL(for: profile)
         let certCN = cert.commonName
 
         signer.phase = .signing
@@ -337,7 +362,7 @@ struct ContentView: View {
         let enDocs = enableDocuments
 
         Task.detached(priority: .userInitiated) {
-            let result = SigningService.sign(ipa: ipa, p12: p12, password: pw, profile: profile,
+            let result = SigningService.sign(ipa: ipa, p12: p12, password: pw, profile: profileFile,
                                              bundleId: bid, output: output, tempDir: tempDir,
                                              removeExtensions: rmExt, enableDocuments: enDocs)
             await MainActor.run {

@@ -60,15 +60,7 @@ struct LibraryView: View {
 
     private var header: some View {
         VStack(spacing: 10) {
-            Image(systemName: "clock.arrow.circlepath")
-                .font(.system(size: 24, weight: .medium))
-                .foregroundColor(T.accentStrong)
-                .frame(width: 60, height: 60)
-                .fClearGlass(in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(T.rule, lineWidth: AppStroke.hairline)
-                }
+            ForgeGlassLogoView(size: 68)
 
             Text("Library")
                 .font(T.display(30))

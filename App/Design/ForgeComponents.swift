@@ -1,19 +1,21 @@
 import SwiftUI
 
-// MARK: - Tactile press (the signature button feel)
+// MARK: - Tactile press style (from SiteAgent GlassPressStyle)
 
 struct GlassTactileButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .opacity(configuration.isPressed ? 0.90 : 1.0)
-            .animation(.spring(response: 0.15, dampingFraction: 0.6), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.965 : 1)
+            .brightness(configuration.isPressed ? 0.045 : 0)
+            .animation(.spring(response: 0.20, dampingFraction: 0.82), value: configuration.isPressed)
     }
 }
 
 // MARK: - Text primitives
 
-/// Small monospaced caption — the workhorse text style of the design.
+/// Small monospaced caption — key text style for values & badges.
 struct MonoText: View {
     let text: String
     var size: CGFloat = 11
@@ -31,7 +33,7 @@ struct MonoText: View {
     }
 }
 
-/// Uppercase sans-bold eyebrow label (e.g. "INPUT", "OPTIONS") in ink3.
+/// Uppercase section header label in ink3.
 struct CaptionText: View {
     let text: String
     var color: Color? = nil
@@ -48,7 +50,7 @@ struct CaptionText: View {
 
 // MARK: - Buttons
 
-/// Primary action — 50pt tall, accent hero gradient, white sans 15 medium.
+/// Primary action button with colorless glass hero surface.
 struct GlassPrimaryButton: View {
     let label: String
     var systemImage: String? = nil
@@ -66,19 +68,15 @@ struct GlassPrimaryButton: View {
                 }
                 Text(label).font(T.sans(15, .semibold))
             }
-            .foregroundColor(.white)
+            .foregroundColor(T.isDark ? .white : T.ink)
             .padding(.horizontal, 14)
             .frame(height: 50)
             .frame(maxWidth: .infinity)
-            .background {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(LinearGradient(
-                        colors: [T.accentHi, T.accentStrong],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ))
+            .glassSurface(.button)
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(T.rule2, lineWidth: AppStroke.hairline)
             }
-            .shadow(color: T.accent.opacity(0.28), radius: 8, y: 2)
             .opacity(disabled ? 0.45 : 1)
         }
         .buttonStyle(GlassTactileButtonStyle())
@@ -86,7 +84,7 @@ struct GlassPrimaryButton: View {
     }
 }
 
-/// Secondary action — 44pt tall, surface glass + hairline rule, sans 13.5.
+/// Secondary action button — glass surface + subtle hairline rule.
 struct GlassSecondaryButton: View {
     let label: String
     var systemImage: String? = nil
@@ -113,9 +111,9 @@ struct GlassSecondaryButton: View {
             .padding(.horizontal, 14)
             .frame(height: 44)
             .frame(maxWidth: .infinity)
-            .fClearGlass(in: RoundedRectangle(cornerRadius: 10, style: .continuous), interactive: true)
+            .glassSurface(.button)
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(T.rule, lineWidth: AppStroke.hairline)
             }
         }
@@ -140,14 +138,14 @@ struct GlassSection<Content: View>: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 CaptionText(text: title)
-                Rectangle().fill(T.rule).frame(height: 1)   // hairline extends right
+                Rectangle().fill(T.rule).frame(height: 1)
             }
             .padding(.bottom, 8)
 
             VStack(spacing: 0) { content() }
-                .fGlass(cornerRadius: 16)
+                .glassSurface(.card, cornerRadius: 18)
                 .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
                         .stroke(T.rule, lineWidth: AppStroke.hairline)
                 }
         }
@@ -165,7 +163,7 @@ struct GlassRowDivider: View {
     }
 }
 
-/// One row inside a GlassSection — label sans 15 in ink, trailing content.
+/// Row inside a GlassSection.
 struct GlassRow<Trailing: View>: View {
     let label: String
     @ViewBuilder var trailing: () -> Trailing
@@ -184,7 +182,7 @@ struct GlassRow<Trailing: View>: View {
     }
 }
 
-/// Tappable file-picker row — quiet icon, label, chosen filename in mono.
+/// File-picker row.
 struct GlassFileRow: View {
     let icon: String
     let label: String
@@ -220,7 +218,7 @@ struct GlassFileRow: View {
     }
 }
 
-/// Text-input row — quiet icon, label, trailing plain field.
+/// Text-input row.
 struct GlassInputRow: View {
     let icon: String
     let label: String
@@ -249,7 +247,7 @@ struct GlassInputRow: View {
             }
             .textFieldStyle(.plain)
             .font(T.mono(13))
-            .foregroundColor(T.ink2)
+            .foregroundColor(T.ink)
             .multilineTextAlignment(.trailing)
             .frame(maxWidth: 170)
         }
@@ -258,7 +256,7 @@ struct GlassInputRow: View {
     }
 }
 
-/// Toggle row — label plus the custom 32×18 glass toggle.
+/// Toggle row.
 struct GlassToggleRow: View {
     let label: String
     @Binding var isOn: Bool
@@ -277,7 +275,7 @@ struct GlassToggleRow: View {
     }
 }
 
-/// Custom 32×18 toggle, spring-animated.
+/// Custom 32×18 glass toggle, spring-animated.
 struct GlassToggle: View {
     @Binding var isOn: Bool
 
@@ -289,7 +287,7 @@ struct GlassToggle: View {
         } label: {
             ZStack(alignment: isOn ? .trailing : .leading) {
                 Capsule()
-                    .fill(isOn ? T.accent : T.ink4.opacity(0.5))
+                    .fill(isOn ? T.controlTint : T.ink4.opacity(0.4))
                     .frame(width: 32, height: 18)
                 Circle()
                     .fill(.white)
@@ -305,7 +303,7 @@ struct GlassToggle: View {
 
 // MARK: - Small primitives
 
-/// Status pill — mono 9 semibold uppercase, tinted capsule.
+/// Status pill — mono 9 semibold uppercase, colorless glass capsule.
 struct GlassStatusPill: View {
     let text: String
     let color: Color
@@ -341,7 +339,7 @@ struct GlassTag: View {
             .foregroundColor(T.ink2)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
-            .fClearGlass(in: RoundedRectangle(cornerRadius: 4))
+            .glassSurface(.badge)
             .overlay {
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(T.rule, lineWidth: AppStroke.hairline)

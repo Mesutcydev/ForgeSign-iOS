@@ -3,6 +3,7 @@ import SwiftUI
 @main
 struct ForgeSignMobileApp: App {
     @StateObject private var certificates = CertificateStore()
+    @StateObject private var profiles = ProfileStore()
     @StateObject private var history = HistoryStore()
     @StateObject private var installer = InstallController()
 
@@ -10,6 +11,7 @@ struct ForgeSignMobileApp: App {
         WindowGroup {
             ForgeRootView()
                 .environmentObject(certificates)
+                .environmentObject(profiles)
                 .environmentObject(history)
                 .environmentObject(installer)
         }
