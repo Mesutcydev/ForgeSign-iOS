@@ -22,11 +22,49 @@ enum ExpiryTone {
     }
 }
 
-/// Parses a PKCS#12 identity with the Security framework and reports
-/// certificate metadata plus remaining validity. iOS has no
-/// SecCertificateCopyValues, so the X.509 DER is walked directly.
+/// Validates a PKCS#12 and reports certificate metadata plus remaining
+/// validity. Primary path uses the vendored OpenSSL engine (accepts every
+/// p12 the signer accepts, including OpenSSL-3 AES-256 files); the Security
+/// framework is the fallback where the bridge is unavailable.
 enum P12Inspector {
-    static func inspect(data: Data, password: String) -> P12Info? {
+    static func inspect(url: URL, password: String) -> P12Info? {
+        #if FORGE_BRIDGE
+        if let info = inspectViaEngine(url: url, password: password) {
+            return info
+        }
+        #endif
+        return inspectViaSecurity(url: url, password: password)
+    }
+
+    #if FORGE_BRIDGE
+    private static func inspectViaEngine(url: URL, password: String) -> P12Info? {
+        var cnBuf = [CChar](repeating: 0, count: 256)
+        var oBuf = [CChar](repeating: 0, count: 256)
+        var ouBuf = [CChar](repeating: 0, count: 256)
+        var msgBuf = [CChar](repeating: 0, count: 256)
+        var notAfter: Int64 = 0
+        let status = forgesign_p12_info(url.path, password,
+                                        &cnBuf, Int32(cnBuf.count),
+                                        &oBuf, Int32(oBuf.count),
+                                        &ouBuf, Int32(ouBuf.count),
+                                        &notAfter,
+                                        &msgBuf, Int32(msgBuf.count))
+        guard status == 0 else { return nil }
+
+        func string(_ buffer: [CChar]) -> String? {
+            let s = String(cString: buffer)
+            return s.isEmpty ? nil : s
+        }
+        return P12Info(commonName: string(cnBuf),
+                       organization: string(oBuf),
+                       teamID: string(ouBuf),
+                       notBefore: nil,
+                       notAfter: notAfter > 0 ? Date(timeIntervalSince1970: TimeInterval(notAfter)) : nil)
+    }
+    #endif
+
+    private static func inspectViaSecurity(url: URL, password: String) -> P12Info? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
         var items: CFArray?
         let options = [kSecImportExportPassphrase as String: password] as CFDictionary
         guard SecPKCS12Import(data as CFData, options, &items) == errSecSuccess,

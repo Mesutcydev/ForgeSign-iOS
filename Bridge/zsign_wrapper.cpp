@@ -6,7 +6,11 @@
 #include "log.h"
 #include <string>
 #include <vector>
+#include <time.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <openssl/pkcs12.h>
+#include <openssl/x509.h>
+#include <openssl/evp.h>
 
 using namespace std;
 
@@ -223,6 +227,93 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
 
     ZFile::RemoveFolder(strFolder.c_str());
     setMsg("Signed OK: " + strOutput);
+    return 0;
+}
+
+// Validates a PKCS#12 with the same OpenSSL engine used for signing (the
+// system SecPKCS12Import rejects OpenSSL-3 style AES-256 p12 files) and
+// reports subject CN / O / OU plus the notAfter epoch for the UI.
+static void FSCopyNameEntry(X509_NAME* name, int nid, char* buf, int len)
+{
+    if (!name || !buf || len <= 0) return;
+    buf[0] = 0;
+    int idx = X509_NAME_get_index_by_NID(name, nid, -1);
+    if (idx < 0) return;
+    X509_NAME_ENTRY* entry = X509_NAME_get_entry(name, idx);
+    if (!entry) return;
+    ASN1_STRING* data = X509_NAME_ENTRY_get_data(entry);
+    if (!data) return;
+    unsigned char* utf8 = NULL;
+    int n = ASN1_STRING_to_UTF8(&utf8, data);
+    if (n < 0 || !utf8) return;
+    snprintf(buf, len, "%.*s", n, (const char*)utf8);
+    OPENSSL_free(utf8);
+}
+
+extern "C" int forgesign_p12_info(const char* p12Path,
+                                  const char* password,
+                                  char* cnBuf,
+                                  int cnLen,
+                                  char* oBuf,
+                                  int oLen,
+                                  char* ouBuf,
+                                  int ouLen,
+                                  long long* notAfterEpoch,
+                                  char* msgBuf,
+                                  int msgBufLen)
+{
+    auto setMsg = [&](const string& m) {
+        if (msgBuf && msgBufLen > 0) {
+            snprintf(msgBuf, msgBufLen, "%s", m.c_str());
+        }
+    };
+
+    if (!p12Path) {
+        setMsg("Missing certificate path.");
+        return 1;
+    }
+    FILE* fp = fopen(p12Path, "rb");
+    if (!fp) {
+        setMsg("Certificate file could not be opened.");
+        return 2;
+    }
+    PKCS12* p12 = d2i_PKCS12_fp(fp, NULL);
+    fclose(fp);
+    if (!p12) {
+        setMsg("Not a valid PKCS#12 file.");
+        return 3;
+    }
+
+    EVP_PKEY* pkey = NULL;
+    X509* cert = NULL;
+    int ok = PKCS12_parse(p12, password ? password : "", &pkey, &cert, NULL);
+    PKCS12_free(p12);
+    if (!ok || !cert) {
+        if (pkey) EVP_PKEY_free(pkey);
+        if (cert) X509_free(cert);
+        setMsg("Wrong password, or not a valid signing certificate.");
+        return 4;
+    }
+
+    X509_NAME* subj = X509_get_subject_name(cert);
+    FSCopyNameEntry(subj, NID_commonName, cnBuf, cnLen);
+    FSCopyNameEntry(subj, NID_organizationName, oBuf, oLen);
+    FSCopyNameEntry(subj, NID_organizationalUnitName, ouBuf, ouLen);
+
+    if (notAfterEpoch) {
+        *notAfterEpoch = 0;
+        const ASN1_TIME* na = X509_get0_notAfter(cert);
+        if (na) {
+            struct tm tmv;
+            memset(&tmv, 0, sizeof(tmv));
+            if (ASN1_TIME_to_tm(na, &tmv)) {
+                *notAfterEpoch = (long long)timegm(&tmv);
+            }
+        }
+    }
+
+    if (pkey) EVP_PKEY_free(pkey);
+    X509_free(cert);
     return 0;
 }
 

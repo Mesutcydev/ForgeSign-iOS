@@ -21,6 +21,18 @@ int forgesign_sign_ipa(const char* ipaPath,
                        char* versionBuf,
                        int versionBufLen);
 
+int forgesign_p12_info(const char* p12Path,
+                       const char* password,
+                       char* cnBuf,
+                       int cnLen,
+                       char* oBuf,
+                       int oLen,
+                       char* ouBuf,
+                       int ouLen,
+                       long long* notAfterEpoch,
+                       char* msgBuf,
+                       int msgBufLen);
+
 const char* forgesign_zsign_version(void);
 
 #ifdef __cplusplus

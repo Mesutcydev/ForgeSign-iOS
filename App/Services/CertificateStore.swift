@@ -71,9 +71,6 @@ final class CertificateStore: ObservableObject {
         defer { if scoped { source.stopAccessingSecurityScopedResource() } }
 
         guard let data = try? Data(contentsOf: source) else { return .failure(.unreadable) }
-        guard let info = P12Inspector.inspect(data: data, password: password) else {
-            return .failure(.badPassword)
-        }
 
         var filename = source.lastPathComponent
         if certificates.contains(where: { $0.filename == filename }) {
@@ -87,6 +84,11 @@ final class CertificateStore: ObservableObject {
             try data.write(to: dest, options: .completeFileProtection)
         } catch {
             return .failure(.copyFailed)
+        }
+
+        guard let info = P12Inspector.inspect(url: dest, password: password) else {
+            try? FileManager.default.removeItem(at: dest)
+            return .failure(.badPassword)
         }
 
         var record = CertificateRecord(
