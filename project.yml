@@ -1,0 +1,55 @@
+name: ForgeSignMobile
+options:
+  bundleIdPrefix: com.forgesign
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGN_IDENTITY: ""
+    ENABLE_BITCODE: "NO"
+
+targets:
+  ForgeSignMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+      - path: Bridge
+      - path: vendor/zsign
+        excludes:
+          - "zsign.cpp"
+          - "third-party/minizip/iowin32.c"
+          - "third-party/minizip/iowin32.h"
+          - "third-party/minizip/mztools.c"
+          - "third-party/minizip/mztools.h"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.forgesign.mobile
+        PRODUCT_NAME: ForgeSign
+        INFOPLIST_FILE: Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_OBJC_BRIDGING_HEADER: Bridge/ForgeSignBridge.h
+        CLANG_CXX_LANGUAGE_STANDARD: c++11
+        CLANG_CXX_LIBRARY: libc++
+        GCC_C_LANGUAGE_STANDARD: gnu11
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/vendor/zsign
+          - $(SRCROOT)/vendor/zsign/common
+          - $(SRCROOT)/vendor/zsign/third-party/zlib
+          - $(SRCROOT)/vendor/openssl/include
+        LIBRARY_SEARCH_PATHS:
+          - $(SRCROOT)/vendor/openssl
+        OTHER_LDFLAGS:
+          - -lcrypto
+          - -lssl
+        SWIFT_OPTIMIZATION_LEVEL: -Onone
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - ZSIGN_VERSION=0.1.0
