@@ -122,41 +122,56 @@ final class ProfileStore: ObservableObject {
     }
 }
 
-/// Parses the XML plist embedded inside a signed .mobileprovision blob and
-/// pulls out the fields ForgeSign surfaces (name, team, expiry). The CMS
-/// signature itself is not verified here — zsign validates the profile when
-/// signing.
+/// Parses the plist embedded inside a signed .mobileprovision blob and pulls
+/// out the fields ForgeSign surfaces (name, team, expiry). The CMS signature
+/// itself is not verified here — zsign validates the profile when signing.
 enum ProvisioningProfileInspector {
     static func inspect(data: Data) -> (name: String, teamID: String?, expirationDate: Date?)? {
-        guard let xml = embeddedPlistXML(from: data),
-              let plist = try? PropertyListSerialization.propertyList(from: xml,
-                                                                      options: [],
-                                                                      format: nil) as? [String: Any]
-        else { return nil }
+        // The DER/CMS wrapper around the payload is binary, so the whole file
+        // can never be decoded as a String. Slice out the embedded plist by
+        // its magic markers and let PropertyListSerialization parse it.
+        for probe in probeSlices(in: data) {
+            guard let plist = try? PropertyListSerialization.propertyList(from: probe,
+                                                                          options: [],
+                                                                          format: nil),
+                  let dict = plist as? [String: Any]
+            else { continue }
 
-        let name = plist["Name"] as? String
-            ?? (plist["ProfileName"] as? String)
-            ?? "Provisioning Profile"
+            let name = dict["Name"] as? String
+                ?? (dict["ProfileName"] as? String)
+                ?? "Provisioning Profile"
 
-        let teamID: String?
-        if let teamArray = plist["TeamIdentifier"] as? [String] {
-            teamID = teamArray.first
-        } else {
-            teamID = plist["TeamIdentifier"] as? String
+            let teamID: String?
+            if let teamArray = dict["TeamIdentifier"] as? [String] {
+                teamID = teamArray.first
+            } else {
+                teamID = dict["TeamIdentifier"] as? String
+            }
+
+            return (name, teamID, dict["ExpirationDate"] as? Date)
         }
-
-        let expirationDate = plist["ExpirationDate"] as? Date
-        return (name, teamID, expirationDate)
+        return nil
     }
 
-    /// A .mobileprovision is a CMS/PKCS#7 blob whose signed payload is an XML
-    /// plist. We locate that plist by scanning for its outer tags.
-    private static func embeddedPlistXML(from data: Data) -> Data? {
-        guard let text = String(data: data, encoding: .ascii) else { return nil }
-        guard let start = text.range(of: "<?xml"),
-              let end = text.range(of: "</plist>", range: start.upperBound..<text.endIndex)
-        else { return nil }
-        let xml = text[start.lowerBound...end.upperBound]
-        return Data(xml.utf8)
+    /// A .mobileprovision is a CMS/PKCS#7 blob. Its signed payload is usually
+    /// an XML plist (Xcode style), so we slice from `<?xml` to `</plist>`. As a
+    /// fallback we also probe a `bplist00` binary plist (trimmed at the end of
+    /// the file, where the CMS blob typically ends right after the plist).
+    private static func probeSlices(in data: Data) -> [Data] {
+        var slices: [Data] = []
+
+        let xmlMagic = Data("<?xml".utf8)
+        let plistEnd = Data("</plist>".utf8)
+        if let start = data.range(of: xmlMagic),
+           let end = data.range(of: plistEnd, in: start.upperBound..<data.endIndex) {
+            slices.append(data.subdata(in: start.lowerBound..<end.upperBound))
+        }
+
+        let binaryMagic = Data("bplist00".utf8)
+        if let start = data.range(of: binaryMagic) {
+            slices.append(data.subdata(in: start.lowerBound..<data.endIndex))
+        }
+
+        return slices
     }
 }
