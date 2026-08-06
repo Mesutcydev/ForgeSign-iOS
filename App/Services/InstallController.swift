@@ -39,14 +39,20 @@ final class InstallController: ObservableObject {
                     }
                 }
 
-                // Self-check: confirm the HTTPS server is actually serving the
-                // manifest before handing off to the installer.
+                // Best-effort self-check. URLSession and the iOS OTA installer
+                // use different TLS stacks — a URLSession failure here must not
+                // abort the install (that was masking a working itms-services
+                // handoff with "A TLS error caused the secure connection to fail").
                 let base = server.installBaseURL
-                let checkURL = URL(string: "\(base)/manifest.plist")!
-                let (_, resp) = try await URLSession.shared.data(from: checkURL)
-                guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-                    throw NSError(domain: "forgesign.install", code: 1,
-                                  userInfo: [NSLocalizedDescriptionKey: "Local server self-check failed."])
+                if let checkURL = URL(string: "\(base)/manifest.plist") {
+                    do {
+                        let (_, resp) = try await URLSession.shared.data(from: checkURL)
+                        if (resp as? HTTPURLResponse)?.statusCode != 200 {
+                            installStatus = "Local server self-check returned a non-200; trying installer anyway…"
+                        }
+                    } catch {
+                        installStatus = "Self-check skipped (\(error.localizedDescription)). Triggering installer…"
+                    }
                 }
 
                 guard let itmsURL = URL(string: server.itmsServicesURL) else {
