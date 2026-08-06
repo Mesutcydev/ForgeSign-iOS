@@ -1,39 +1,22 @@
 import Foundation
+import Network
 import Darwin
-import os
 
-/// A minimal local HTTP server that serves a signed IPA plus an `itms-services`
+/// A minimal local HTTPS server that serves a signed IPA plus an `itms-services`
 /// manifest so iOS will install the app directly on-device.
 ///
-/// iOS OTA installation normally requires HTTPS manifests, but it accepts
-/// plain HTTP for localhost — the same loopback behaviour the App Store /
-/// AltStore-type installers rely on. The manifest and IPA are therefore served
-/// as `http://127.0.0.1:<port>/...` on this app's own loopback address.
-///
-/// NOTE on the transport stack: this server deliberately uses plain BSD
-/// sockets (socket/bind/listen/accept) instead of Network.framework's
-/// `NWListener`. On recent iOS releases an `NWListener` backed by bare
-/// `NWParameters()` fails to start with `POSIXErrorCode 22 (EINVAL)` — "Install
-/// failed: … NWError error 22" — while raw sockets bind and listen without
-/// trouble. The original (working) build of ForgeSign used the same raw-socket
-/// approach, so this implementation mirrors it.
-///
-/// NOTE on TLS: the previous implementation served these over HTTPS using the
-/// embedded `*.backloop.dev` identity. That certificate now chains to Let's
-/// Encrypt's new `ISRG Root YR` root, which older iOS trust stores do not
-/// include, so the installer aborted the manifest fetch with a TLS error. Plain
-/// loopback HTTP has no certificate-dependency and works on every iOS version.
+/// iOS OTA installation refuses plain-HTTP manifests (since iOS 7.1), so this
+/// listener runs TLS using the embedded `*.backloop.dev` identity. That domain
+/// resolves to 127.0.0.1, and its certificate is signed by Let's Encrypt, so
+/// the system installer can fetch `https://install.backloop.dev:<port>/...`
+/// straight from this app with a trusted handshake.
 ///
 /// Flow: ForgeSign signs the IPA, starts this server, then opens
-/// `itms-services://?action=download-manifest&url=http://127.0.0.1:<port>/manifest.plist`.
+/// `itms-services://?action=download-manifest&url=https://install.backloop.dev:<port>/manifest.plist`.
 final class LocalInstallServer: @unchecked Sendable {
-    private struct State {
-        var listenerFD: Int32 = -1
-        var running = false
-        var port: UInt16 = 0
-    }
-
-    private let state = OSAllocatedUnfairLock(initialState: State())
+    private var listener: NWListener?
+    private let queue = DispatchQueue(label: "forgesign.installserver")
+    private(set) var port: UInt16 = 0
 
     private var ipaURL: URL?
     private var bundleId = ""
@@ -41,18 +24,14 @@ final class LocalInstallServer: @unchecked Sendable {
     private var title = "App"
 
     /// Base URL (scheme+host+port) the installer uses to reach this server.
-    /// The manifest and IPA are served over loopback plain HTTP so the fetch
-    /// carries no TLS/trust dependency (see the header for why that matters).
+    /// The hostname is covered by the embedded certificate and resolves to
+    /// 127.0.0.1, i.e. this very app's listener.
     var installBaseURL: String {
-        "http://127.0.0.1:\(port)"
+        "https://\(InstallCertificate.hostname):\(port)"
     }
 
     var manifestURL: String {
         "\(installBaseURL)/manifest.plist"
-    }
-
-    var port: UInt16 {
-        state.withLock { $0.port }
     }
 
     /// Starts the server and returns the bound port.
@@ -62,172 +41,90 @@ final class LocalInstallServer: @unchecked Sendable {
         self.bundleVersion = bundleVersion.isEmpty ? "1.0" : bundleVersion
         self.title = title
 
-        let fd = socket(AF_INET, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: nil) }
+        // iOS only installs from HTTPS sources; without the TLS identity we
+        // cannot serve one, so fail loudly instead of falling back to HTTP.
+        guard let params = InstallCertificate.tlsParameters() else {
+            throw NWError.posix(.EINVAL)
+        }
+        params.allowLocalEndpointReuse = true
+        let l = try NWListener(using: params, on: .any)
+        self.listener = l
+        l.newConnectionHandler = { [weak self] conn in self?.handle(conn) }
 
-        var reuse: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
-        // Never let a send to a vanished connection raise SIGPIPE.
-        var noSigPipe: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
-
-        var addr = sockaddr_in()
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = 0 // ephemeral port, read back via getsockname
-        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
-
-        let bindResult = withUnsafePointer(to: &addr) { ptr -> Int32 in
-            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
-                bind(fd, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+        let q = queue
+        let boundPort: UInt16 = try await withCheckedThrowingContinuation { cont in
+            l.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    cont.resume(returning: l.port?.rawValue ?? 0)
+                case .failed(let error):
+                    cont.resume(throwing: error)
+                default:
+                    break
+                }
             }
+            l.start(queue: q)
         }
-        guard bindResult == 0 else {
-            let err = errno
-            close(fd)
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err), userInfo: nil)
-        }
-        guard listen(fd, 8) == 0 else {
-            let err = errno
-            close(fd)
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err), userInfo: nil)
-        }
-
-        var boundAddr = sockaddr_in()
-        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
-        guard getsockname(fd, withUnsafeMutablePointer(to: &boundAddr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 } }, &len) == 0 else {
-            let err = errno
-            close(fd)
-            throw NSError(domain: NSPOSIXErrorDomain, code: Int(err), userInfo: nil)
-        }
-        let boundPort = UInt16(boundAddr.sin_port.bigEndian)
-
-        state.withLock { $0.listenerFD = fd; $0.port = boundPort; $0.running = true }
-
-        let t = Thread { [weak self] in self?.acceptLoop(fd) }
-        t.name = "forgesign.installserver"
-        t.start()
-
+        self.port = boundPort
         return boundPort
     }
 
     func stop() {
-        let fd = state.withLock { state -> Int32 in
-            state.running = false
-            let fd = state.listenerFD
-            state.listenerFD = -1
-            return fd
-        }
-        if fd >= 0 { close(fd) }
+        listener?.cancel()
+        listener = nil
     }
 
-    // MARK: Accept loop
+    // MARK: Connection handling
 
-    private func acceptLoop(_ fd: Int32) {
-        while true {
-            let shouldRun = state.withLock { $0.running }
-            guard shouldRun else { break }
+    private func handle(_ conn: NWConnection) {
+        conn.start(queue: queue)
+        receiveRequest(conn, buffer: Data())
+    }
 
-            // Non-blocking accept with a short sleep keeps the loop stoppable.
-            let client = accept(fd, nil, nil)
-            if client >= 0 {
-                handleConnection(client)
+    private func receiveRequest(_ conn: NWConnection, buffer: Data) {
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            var buf = buffer
+            if let data { buf.append(data) }
+            if let range = buf.range(of: Data("\r\n\r\n".utf8)) {
+                let headerData = buf.subdata(in: 0..<range.lowerBound)
+                let request = String(data: headerData, encoding: .utf8) ?? ""
+                self.respond(conn, request: request)
+            } else if isComplete || error != nil {
+                conn.cancel()
             } else {
-                Thread.sleep(forTimeInterval: 0.05)
+                self.receiveRequest(conn, buffer: buf)
             }
         }
     }
 
-    private func handleConnection(_ fd: Int32) {
-        defer { close(fd) }
-
-        // Read request head (up to 64 KiB) until \r\n\r\n.
-        var buffer = Data()
-        var raw = [UInt8](repeating: 0, count: 4096)
-        while buffer.count < 64 * 1024 {
-            let n = recv(fd, &raw, raw.count, 0)
-            if n <= 0 { return }
-            buffer.append(contentsOf: raw[0..<n])
-            if buffer.range(of: Data("\r\n\r\n".utf8)) != nil { break }
-        }
-        guard let headerRange = buffer.range(of: Data("\r\n\r\n".utf8)),
-              let request = String(data: buffer.subdata(in: 0..<headerRange.lowerBound), encoding: .utf8) else {
-            return
-        }
-
+    private func respond(_ conn: NWConnection, request: String) {
         let lines = request.split(separator: "\r\n").map(String.init)
         let firstLine = lines.first ?? ""
         let parts = firstLine.split(separator: " ").map(String.init)
         let method = parts.first ?? "GET"
         let path = parts.count > 1 ? parts[1] : "/"
-        let headOnly = method == "HEAD"
 
         if path.hasPrefix("/manifest.plist") {
-            sendResponse(fd, status: "200 OK", contentType: "application/xml", body: manifestData(), headOnly: headOnly)
+            send(conn, status: "200 OK", contentType: "application/xml", body: manifestData(), headOnly: method == "HEAD")
         } else if path.hasPrefix("/app.ipa") {
             if let ipa = ipaURL, FileManager.default.fileExists(atPath: ipa.path) {
-                sendFile(fd, url: ipa, headOnly: headOnly)
+                sendFile(conn, url: ipa, headOnly: method == "HEAD")
             } else {
-                sendResponse(fd, status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8), headOnly: false)
+                send(conn, status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8), headOnly: false)
             }
         } else if path.hasPrefix("/install") {
             // Fallback for iOS versions where opening itms-services:// directly
             // from an app is gated: Safari lands here and is redirected into
             // the installer by the script below.
-            sendResponse(fd, status: "200 OK", contentType: "text/html", body: Data(installPage().utf8), headOnly: false)
+            send(conn, status: "200 OK", contentType: "text/html", body: Data(installPage().utf8), headOnly: false)
         } else {
-            sendResponse(fd, status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8), headOnly: false)
+            send(conn, status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8), headOnly: false)
         }
     }
 
-    /// Called on the server thread after the IPA has been fully streamed.
+    /// Called on the server queue after the IPA has been fully streamed.
     var onIPADelivered: (() -> Void)?
-
-    private func sendAll(_ fd: Int32, _ data: Data) {
-        var sent = 0
-        data.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { return }
-            while sent < data.count {
-                let n = send(fd, base.advanced(by: sent), data.count - sent, 0)
-                if n <= 0 { return }
-                sent += n
-            }
-        }
-    }
-
-    private func sendResponse(_ fd: Int32, status: String, contentType: String, body: Data, headOnly: Bool) {
-        var header = "HTTP/1.1 \(status)\r\n"
-        header += "Content-Type: \(contentType)\r\n"
-        header += "Content-Length: \(body.count)\r\n"
-        header += "Connection: close\r\n\r\n"
-        var response = Data(header.utf8)
-        if !headOnly { response.append(body) }
-        sendAll(fd, response)
-    }
-
-    private func sendFile(_ fd: Int32, url: URL, headOnly: Bool) {
-        guard let handle = try? FileHandle(forReadingFrom: url) else {
-            sendResponse(fd, status: "404 Not Found", contentType: "text/plain", body: Data(), headOnly: false)
-            return
-        }
-        let fileSize = handle.seekToEndOfFile()
-        handle.seek(toFileOffset: 0)
-        var header = "HTTP/1.1 200 OK\r\n"
-        header += "Content-Type: application/octet-stream\r\n"
-        header += "Content-Length: \(fileSize)\r\n"
-        header += "Connection: close\r\n\r\n"
-        sendAll(fd, Data(header.utf8))
-        if headOnly {
-            try? handle.close()
-            return
-        }
-        while true {
-            let chunk = handle.readData(ofLength: 1024 * 1024)
-            if chunk.isEmpty { break }
-            sendAll(fd, chunk)
-        }
-        try? handle.close()
-        onIPADelivered?()
-    }
 
     private func installPage() -> String {
         """
@@ -274,6 +171,56 @@ final class LocalInstallServer: @unchecked Sendable {
         allowed.insert(charactersIn: "-._~/:")
         let encoded = manifest.addingPercentEncoding(withAllowedCharacters: allowed) ?? manifest
         return "itms-services://?action=download-manifest&url=\(encoded)"
+    }
+
+    private func send(_ conn: NWConnection, status: String, contentType: String, body: Data, headOnly: Bool) {
+        var header = "HTTP/1.1 \(status)\r\n"
+        header += "Content-Type: \(contentType)\r\n"
+        header += "Content-Length: \(body.count)\r\n"
+        header += "Connection: close\r\n\r\n"
+        var response = Data(header.utf8)
+        if !headOnly { response.append(body) }
+        conn.send(content: response, completion: .contentProcessed { _ in
+            conn.cancel()
+        })
+    }
+
+    private func sendFile(_ conn: NWConnection, url: URL, headOnly: Bool) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else {
+            send(conn, status: "404 Not Found", contentType: "text/plain", body: Data(), headOnly: false)
+            return
+        }
+        let fileSize = handle.seekToEndOfFile()
+        handle.seek(toFileOffset: 0)
+        var header = "HTTP/1.1 200 OK\r\n"
+        header += "Content-Type: application/octet-stream\r\n"
+        header += "Content-Length: \(fileSize)\r\n"
+        header += "Connection: close\r\n\r\n"
+        conn.send(content: Data(header.utf8), completion: .contentProcessed { [weak self] _ in
+            if headOnly {
+                try? handle.close()
+                conn.cancel()
+            } else {
+                self?.sendChunks(conn, handle: handle)
+            }
+        })
+    }
+
+    private func sendChunks(_ conn: NWConnection, handle: FileHandle) {
+        let chunk = handle.readData(ofLength: 1024 * 1024)
+        if chunk.isEmpty {
+            try? handle.close()
+            // Give the TLS stack a moment to flush the final records and
+            // close_notify before tearing the connection down.
+            queue.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                conn.cancel()
+                self?.onIPADelivered?()
+            }
+            return
+        }
+        conn.send(content: chunk, completion: .contentProcessed { [weak self] _ in
+            self?.sendChunks(conn, handle: handle)
+        })
     }
 
     // MARK: Manifest
