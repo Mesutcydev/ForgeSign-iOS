@@ -2,6 +2,8 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign, install and manage IPAs entirely on the device — no computer, no server, no uploads.
 
+**[Explore the ForgeSign 1.1 site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download the unsigned IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.1/ForgeSign-1.1.ipa)**
+
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
 <p align="center">
@@ -16,7 +18,10 @@ ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ e
 - **Keychain passwords** — opt-in password storage in the iOS Keychain (with an encrypted-file fallback when the Keychain is unavailable), so re-signing takes two taps.
 - **Install on device** — semi-local OTA install: the IPA is served over loopback HTTP while a trusted remote HTTPS plist (`api.palera.in`) drives `itms-services` directly (Safari is a fallback only). Silent-audio keep-alive keeps large downloads alive in the background.
 - **Library** — a persistent history of every signed app with status (signed / installing / installed / missing), plus reinstall, share and delete actions.
-- **Glass design language** — translucent cards, ambient color blooms, Liquid Glass on iOS 26+ with a material fallback back to iOS 16, light and dark themes.
+- **IPA preflight** — package, bundle, encryption and architecture signals are shown before a signing run.
+- **Sources** — save repository feeds and hand selected IPA downloads into the normal signing flow.
+- **Optional dylib injection** — inject a compatible decrypted dylib into the app, with an opt-in app-extension path, before signing. The original IPA is left untouched.
+- **Glass design language** — lighter translucent cards, ambient color blooms, Liquid Glass on iOS 26+ with a material fallback back to iOS 16, light and dark themes.
 
 ## Requirements
 
@@ -35,13 +40,24 @@ Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the
 
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign.ipa` from the Releases tab. The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
+Grab `ForgeSign-1.1.ipa` from the [1.1 release](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.1). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
 3. Install the signed IPA on your device.
 
 Only sign and install applications you have the rights to modify. Intended for your own builds and development use.
+
+## What’s new in 1.1
+
+- Preflight card for package, bundle, encryption and architecture checks.
+- Optional dylib injection with app-extension support for compatible decrypted Mach-O inputs.
+- Sources tab with repository feeds and direct IPA handoff.
+- Lighter glass surfaces and refreshed dark-mode screens.
+
+![ForgeSign Sign tab in dark mode](docs/screens/screenshot-sign-dark.png)
+
+![ForgeSign Sources and Library tabs in dark mode](docs/screens/screenshot-sources-dark.png) ![ForgeSign Library tab in dark mode](docs/screens/screenshot-library-dark.png)
 
 ## How it works
 

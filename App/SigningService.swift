@@ -45,6 +45,10 @@ final class SigningService: ObservableObject {
                      bundleId: String, output: URL, tempDir: URL,
                      removeExtensions: Bool, enableDocuments: Bool)
         -> (ok: Bool, message: String, signedBundleId: String, signedVersion: String) {
+        #if !FORGE_BRIDGE
+        // UI-preview builds (e.g. the simulator target) omit the zsign engine.
+        return (false, "Signing engine unavailable in this build.", "", "1.0")
+        #else
         var msgBuf = [CChar](repeating: 0, count: 1024)
         var bidBuf = [CChar](repeating: 0, count: 512)
         var verBuf = [CChar](repeating: 0, count: 128)
@@ -64,6 +68,7 @@ final class SigningService: ObservableObject {
         let signedVersion = String(decoding: verBuf.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
         return (status == 0, message.isEmpty ? (status == 0 ? "Signed." : "Failed.") : message,
                 signedId, signedVersion.isEmpty ? "1.0" : signedVersion)
+        #endif
     }
 
     func cleanStaged() {

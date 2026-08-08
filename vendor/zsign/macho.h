@@ -13,6 +13,7 @@ public:
 	bool Free();
 	void PrintInfo();
 	bool CheckSignature() const;
+	bool IsEncrypted() const;
 	bool Sign(ZSignAsset* pSignAsset,
 				bool bForce, 
 				string strBundleId, 

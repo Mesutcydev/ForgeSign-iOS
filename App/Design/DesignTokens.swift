@@ -18,9 +18,9 @@ enum AppRadius {
 }
 
 enum AppTypography {
-    static let eyebrow: Font = .caption2.weight(.semibold)
-    static let secondary: Font = .subheadline
-    static let body: Font = .body
+    static let eyebrow: Font = .caption2.weight(.bold)
+    static let secondary: Font = .subheadline.weight(.medium)
+    static let body: Font = .body.weight(.medium)
     static let title: Font = .title3.weight(.semibold)
 }
 

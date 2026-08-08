@@ -14,7 +14,6 @@ struct LibraryView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                ForgeBackdrop()
                 ScrollView {
                     VStack(spacing: 0) {
                         header
@@ -38,6 +37,7 @@ struct LibraryView: View {
                 }
                 .scrollIndicators(.hidden)
                 .scrollContentBackground(.hidden)
+                .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
             }
             .confirmationDialog(
@@ -59,7 +59,7 @@ struct LibraryView: View {
     }
 
     private var header: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: T.gap) {
             ForgeGlassLogoView(size: 60)
 
             Text("Library")
@@ -68,12 +68,12 @@ struct LibraryView: View {
 
             MonoText(text: "SIGNED APP HISTORY", size: 10, weight: .semibold, color: T.ink3)
         }
-        .padding(.top, 28)
-        .padding(.bottom, 4)
+        .padding(.top, 32)
+        .padding(.bottom, 8)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: T.gap) {
             Image(systemName: "shippingbox")
                 .font(.system(size: 20))
                 .foregroundColor(T.ink3)
@@ -84,14 +84,14 @@ struct LibraryView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, T.pad)
         .fGlass(cornerRadius: 16)
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(T.rule, lineWidth: AppStroke.hairline)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 20)
+        .padding(.horizontal, T.pad)
+        .padding(.top, 24)
     }
 
     private func row(_ record: SigningRecord) -> some View {
@@ -107,15 +107,29 @@ struct LibraryView: View {
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(record.outputName)
-                        .font(T.mono(12))
+                        .font(T.mono(12, .medium))
                         .foregroundColor(T.ink)
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    Text(record.bundleId)
-                        .font(T.mono(10))
-                        .foregroundColor(T.ink3)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    HStack(spacing: 6) {
+                        Text(record.bundleId)
+                            .font(T.mono(10, .medium))
+                            .foregroundColor(T.ink3)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if !record.version.isEmpty {
+                            Text("v\(record.version)")
+                                .font(T.mono(9))
+                                .foregroundColor(T.accent2)
+                        }
+                    }
+                    if let certificateCN = record.certificateCN, !certificateCN.isEmpty {
+                        Text(certificateCN)
+                            .font(T.mono(9))
+                            .foregroundColor(T.ink4)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                    }
                 }
 
                 Spacer(minLength: 8)
@@ -123,12 +137,12 @@ struct LibraryView: View {
                 VStack(alignment: .trailing, spacing: 4) {
                     statusPill(record)
                     Text(record.date.formatted(date: .abbreviated, time: .shortened))
-                        .font(T.mono(9))
+                        .font(T.mono(9, .medium))
                         .foregroundColor(T.ink4)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .contentShape(Rectangle())
         }
         .buttonStyle(GlassTactileButtonStyle())

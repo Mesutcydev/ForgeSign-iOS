@@ -8,6 +8,7 @@ struct ContentView: View {
     @EnvironmentObject private var profileStore: ProfileStore
     @EnvironmentObject private var history: HistoryStore
     @EnvironmentObject private var install: InstallController
+    @EnvironmentObject private var repoStore: RepositoryStore
     @Environment(\.forgeTheme) private var T
 
     @State private var ipaURL: URL?
@@ -15,25 +16,40 @@ struct ContentView: View {
     @State private var bundleId = ""
     @State private var removeExtensions = false
     @State private var enableDocuments = false
+    @State private var dylibURL: URL?
+    @State private var injectIntoExtensions = false
+    @State private var preflightState: IPAPreflightState = .idle
     @State private var signedIPA: URL?
     @State private var signedBundleId = ""
-    @State private var signedVersion = "1.0"
+    @State private var signedVersion = "1.1"
     @State private var lastRecordID: UUID?
     @State private var showIPAImporter = false
     @State private var showProfileSheet = false
     @State private var showCertSheet = false
+    @State private var showDylibImporter = false
     @State private var showShare = false
 
     var body: some View {
         NavigationStack {
             ZStack {
-                ForgeBackdrop()
                 ScrollView {
                     VStack(spacing: 0) {
                         header
 
                         inputSection
+                        if ipaURL != nil {
+                            IPAPreflightCard(state: preflightState,
+                                             certificate: certStore.selected,
+                                             profile: profileStore.selected)
+                        }
                         optionsSection
+                        DylibInjectionSection(dylibURL: $dylibURL,
+                                              injectIntoExtensions: $injectIntoExtensions,
+                                              chooseDylib: { showDylibImporter = true },
+                                              removeDylib: {
+                                                  dylibURL = nil
+                                                  injectIntoExtensions = false
+                                              })
                         signButton
 
                         if case .failed(let message) = signer.phase {
@@ -52,9 +68,14 @@ struct ContentView: View {
                 }
                 .scrollIndicators(.hidden)
                 .scrollContentBackground(.hidden)
+                .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
                 .fileImporter(isPresented: $showIPAImporter, allowedContentTypes: [.zip, UTType(filenameExtension: "ipa") ?? .zip]) { result in
-                    if case .success(let url) = result { ipaURL = signer.stage(url) }
+                    if case .success(let url) = result { stageIPA(url) }
+                }
+                .fileImporter(isPresented: $showDylibImporter,
+                              allowedContentTypes: [UTType(filenameExtension: "dylib") ?? .data]) { result in
+                    if case .success(let url) = result { stageDylib(url) }
                 }
                 .sheet(isPresented: $showProfileSheet) {
                     ProfilesSheet()
@@ -70,6 +91,13 @@ struct ContentView: View {
                         history.setInstallState(.failed, for: id)
                     }
                 }
+                .onChange(of: repoStore.pendingIPA) { pending in
+                    // A repo download landed — load it as the input to sign.
+                    if let pending {
+                        stageIPA(pending, fallbackToSource: true)
+                        repoStore.pendingIPA = nil
+                    }
+                }
             }
         }
     }
@@ -77,7 +105,7 @@ struct ContentView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: T.gap) {
             ForgeGlassLogoView(size: 60)
 
             Text("ForgeSign")
@@ -86,8 +114,8 @@ struct ContentView: View {
 
             MonoText(text: "ON-DEVICE IPA SIGNER", size: 10, weight: .semibold, color: T.ink3)
         }
-        .padding(.top, 28)
-        .padding(.bottom, 4)
+        .padding(.top, 32)
+        .padding(.bottom, 8)
     }
 
     // MARK: - Input
@@ -124,7 +152,7 @@ struct ContentView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(T.accent2)
                     .frame(width: 22)
-                Text("Certificate (.p12)").font(T.sans(15)).foregroundColor(T.ink)
+                Text("Certificate (.p12)").font(T.sans(15, .medium)).foregroundColor(T.ink)
                 Spacer(minLength: 8)
                 if let cert = certStore.selected {
                     let expiry = P12Inspector.expiry(cert.notAfter)
@@ -137,15 +165,15 @@ struct ContentView: View {
                         .frame(maxWidth: 130, alignment: .trailing)
                 } else {
                     Text("Choose…")
-                        .font(T.sans(13))
+                        .font(T.sans(13, .medium))
                         .foregroundColor(T.ink3)
                 }
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(T.ink4)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .contentShape(Rectangle())
         }
         .buttonStyle(GlassTactileButtonStyle())
@@ -160,7 +188,7 @@ struct ContentView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(T.accent2)
                     .frame(width: 22)
-                Text("Profile (.mobileprovision)").font(T.sans(15)).foregroundColor(T.ink)
+                Text("Profile (.mobileprovision)").font(T.sans(15, .medium)).foregroundColor(T.ink)
                 Spacer(minLength: 8)
                 if let profile = profileStore.selected {
                     let expiry = P12Inspector.expiry(profile.notAfter)
@@ -173,15 +201,15 @@ struct ContentView: View {
                         .frame(maxWidth: 130, alignment: .trailing)
                 } else {
                     Text("Choose…")
-                        .font(T.sans(13))
+                        .font(T.sans(13, .medium))
                         .foregroundColor(T.ink3)
                 }
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(T.ink4)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .contentShape(Rectangle())
         }
         .buttonStyle(GlassTactileButtonStyle())
@@ -216,8 +244,8 @@ struct ContentView: View {
                 }
             }
             .foregroundColor(T.isDark ? .white : T.ink)
-            .padding(.horizontal, 14)
-            .frame(height: 50)
+            .padding(.horizontal, 16)
+            .frame(height: 52)
             .frame(maxWidth: .infinity)
             .glassSurface(.button)
             .overlay {
@@ -229,8 +257,8 @@ struct ContentView: View {
         }
         .buttonStyle(GlassTactileButtonStyle())
         .disabled(!canSign || signing)
-        .padding(.horizontal, 16)
-        .padding(.top, 24)
+        .padding(.horizontal, T.pad)
+        .padding(.top, 28)
     }
 
     // MARK: - Error
@@ -251,15 +279,15 @@ struct ContentView: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
         .fGlass(cornerRadius: 14)
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .stroke(T.bad.opacity(0.35), lineWidth: AppStroke.hairline)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 20)
+        .padding(.horizontal, T.pad)
+        .padding(.top, 24)
     }
 
     // MARK: - Result
@@ -276,8 +304,8 @@ struct ContentView: View {
                         .truncationMode(.middle)
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 14)
 
                 GlassRowDivider()
 
@@ -301,13 +329,13 @@ struct ContentView: View {
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 13)
                 }
 
                 GlassRowDivider()
 
-                VStack(spacing: 10) {
+                VStack(spacing: T.gap) {
                     GlassPrimaryButton(label: "Install on Device", systemImage: "arrow.down.app") {
                         startInstall()
                     }
@@ -320,12 +348,43 @@ struct ContentView: View {
                         showShare = true
                     }
                 }
-                .padding(14)
+                .padding(16)
             }
         }
     }
 
     // MARK: - Logic
+
+    private func stageIPA(_ source: URL, fallbackToSource: Bool = false) {
+        let localURL = signer.stage(source) ?? (fallbackToSource ? source : nil)
+        guard let localURL else {
+            ipaURL = nil
+            preflightState = .failed("The IPA could not be copied into ForgeSign storage.")
+            return
+        }
+
+        ipaURL = localURL
+        preflightState = .inspecting
+        let temporaryDirectory = signer.workDir
+
+        Task.detached(priority: .utility) {
+            let result = IPAPreflightService.inspect(ipa: localURL,
+                                                      temporaryDirectory: temporaryDirectory)
+            await MainActor.run {
+                guard ipaURL == localURL else { return }
+                switch result {
+                case .success(let inspection):
+                    preflightState = .ready(inspection)
+                case .failure(let error):
+                    preflightState = .failed(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func stageDylib(_ source: URL) {
+        dylibURL = signer.stage(source, as: source.lastPathComponent)
+    }
 
     private var effectivePassword: String? {
         if let cert = certStore.selected, let saved = certStore.savedPassword(for: cert) {
@@ -360,11 +419,38 @@ struct ContentView: View {
         let bid = bundleId.trimmingCharacters(in: .whitespaces)
         let rmExt = removeExtensions
         let enDocs = enableDocuments
+        let selectedDylib = dylibURL
+        let injectExt = injectIntoExtensions
 
         Task.detached(priority: .userInitiated) {
-            let result = SigningService.sign(ipa: ipa, p12: p12, password: pw, profile: profileFile,
+            let signingIPA: URL
+            var preparedIPA: URL?
+            if let selectedDylib {
+                let prepared = tempDir.appendingPathComponent("fs-injected-\(UUID().uuidString).ipa")
+                switch DylibInjectionService.prepare(ipa: ipa,
+                                                      dylib: selectedDylib,
+                                                      output: prepared,
+                                                      temporaryDirectory: tempDir,
+                                                      injectIntoExtensions: injectExt) {
+                case .success:
+                    signingIPA = prepared
+                    preparedIPA = prepared
+                case .failure(let error):
+                    await MainActor.run {
+                        signer.phase = .failed(error.localizedDescription)
+                    }
+                    return
+                }
+            } else {
+                signingIPA = ipa
+            }
+
+            let result = SigningService.sign(ipa: signingIPA, p12: p12, password: pw, profile: profileFile,
                                              bundleId: bid, output: output, tempDir: tempDir,
                                              removeExtensions: rmExt, enableDocuments: enDocs)
+            if let preparedIPA {
+                try? FileManager.default.removeItem(at: preparedIPA)
+            }
             await MainActor.run {
                 if result.ok {
                     signedIPA = output

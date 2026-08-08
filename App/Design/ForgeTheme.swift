@@ -91,7 +91,7 @@ extension ForgeTheme {
         good:      Color(red: 0.133, green: 0.545, blue: 0.302),
         warn:      Color(red: 0.690, green: 0.424, blue: 0.047),
         bad:       Color(red: 0.784, green: 0.118, blue: 0.196),
-        pad: 16, gap: 10,
+        pad: 18, gap: 14,
         isDark: false,
         accentHi:     Color(hex: "626B76"),
         accentDeep:   Color(hex: "343940"),
@@ -116,7 +116,7 @@ extension ForgeTheme {
         good:      Color(red: 0.392, green: 0.784, blue: 0.533),
         warn:      Color(red: 0.898, green: 0.643, blue: 0.263),
         bad:       Color(red: 0.902, green: 0.404, blue: 0.431),
-        pad: 16, gap: 10,
+        pad: 18, gap: 14,
         isDark: true,
         accentHi:     Color(hex: "E2E7ED"),
         accentDeep:   Color(hex: "8A939E"),
@@ -145,12 +145,12 @@ extension ForgeTheme {
     }
 
     /// Sans body typography.
-    func sans(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+    func sans(_ size: CGFloat, _ weight: Font.Weight = .medium) -> Font {
         .system(size: size, weight: weight, design: .default)
     }
 
     /// Monospaced — pervasive for values, badges, and labels.
-    func mono(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+    func mono(_ size: CGFloat, _ weight: Font.Weight = .medium) -> Font {
         .system(size: size, weight: weight, design: .monospaced)
     }
 }

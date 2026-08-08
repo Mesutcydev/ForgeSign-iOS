@@ -14,6 +14,7 @@ settings:
     CODE_SIGNING_REQUIRED: "NO"
     CODE_SIGN_IDENTITY: ""
     ENABLE_BITCODE: "NO"
+    ENABLE_DEBUG_DYLIB: "NO"
 
 targets:
   ForgeSignMobile:
@@ -55,3 +56,23 @@ targets:
         SWIFT_OPTIMIZATION_LEVEL: -Onone
         GCC_PREPROCESSOR_DEFINITIONS:
           - ZSIGN_VERSION=0.1.0
+
+  # UI-preview target for the iOS Simulator. The real app is device-only (the
+  # vendored OpenSSL has no simulator slice), so this target compiles just the
+  # SwiftUI/App layer WITHOUT the zsign bridge or OpenSSL — no FORGE_BRIDGE, no
+  # bridging header, no link flags. Signing is stubbed (see SigningService), but
+  # layout, navigation and the Sources/repo networking all run in the simulator.
+  # Safe to delete if you don't want a simulator preview build.
+  ForgeSignUISim:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.forgesign.mobile.uisim
+        PRODUCT_NAME: ForgeSignUISim
+        INFOPLIST_FILE: Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"

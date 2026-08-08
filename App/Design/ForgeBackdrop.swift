@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Technical canvas grid: drawn once with Canvas.
 struct GridTexture: View {
-    var spacing: CGFloat = 22
+    var spacing: CGFloat = 40
     var color: Color = .white.opacity(0.05)
 
     var body: some View {
@@ -49,8 +49,8 @@ struct ForgeBackdrop: View {
                 .offset(x: 170, y: 300)
 
             GridTexture(
-                spacing: 22,
-                color: Color.primary.opacity(colorScheme == .dark ? 0.065 : 0.045)
+                spacing: 40,
+                color: Color.primary.opacity(colorScheme == .dark ? 0.07 : 0.05)
             )
         }
         .ignoresSafeArea()

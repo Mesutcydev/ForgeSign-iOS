@@ -15,7 +15,6 @@ struct ProfilesSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                ForgeBackdrop()
                 ScrollView {
                     VStack(spacing: 0) {
                         header
@@ -40,20 +39,21 @@ struct ProfilesSheet: View {
                                 .font(T.mono(10))
                                 .foregroundColor(T.bad)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 16)
-                                .padding(.top, 14)
+                                .padding(.horizontal, T.pad)
+                                .padding(.top, 16)
                         }
 
                         GlassSecondaryButton(label: "Import Profile…", systemImage: "plus") {
                             showImporter = true
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 20)
+                        .padding(.horizontal, T.pad)
+                        .padding(.top, 24)
                     }
                     .padding(.bottom, 30)
                 }
                 .scrollIndicators(.hidden)
                 .scrollContentBackground(.hidden)
+                .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
                 .fileImporter(isPresented: $showImporter,
                               allowedContentTypes: [UTType(filenameExtension: "mobileprovision") ?? .data]) { result in
@@ -81,12 +81,12 @@ struct ProfilesSheet: View {
             }
             .buttonStyle(GlassTactileButtonStyle())
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 20)
+        .padding(.horizontal, T.pad)
+        .padding(.top, 24)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: T.gap) {
             Image(systemName: "checkmark.seal.fill")
                 .font(.system(size: 20))
                 .foregroundColor(T.ink3)
@@ -97,14 +97,14 @@ struct ProfilesSheet: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, T.pad)
         .fGlass(cornerRadius: 16)
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(T.rule, lineWidth: AppStroke.hairline)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 20)
+        .padding(.horizontal, T.pad)
+        .padding(.top, 24)
     }
 
     private func row(_ profile: ProfileRecord) -> some View {
@@ -120,17 +120,21 @@ struct ProfilesSheet: View {
                     .foregroundColor(isSelected ? T.accent : T.ink4)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(profile.displayName)
-                        .font(T.sans(15))
+                        .font(T.sans(15, .medium))
                         .foregroundColor(T.ink)
                         .lineLimit(1)
                     HStack(spacing: 6) {
-                        Text(profile.filename)
+                        Text(profile.applicationIdentifier ?? profile.filename)
                             .font(T.mono(10))
                             .foregroundColor(T.ink3)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                        if let team = profile.teamID {
-                            Text("TEAM \(team.uppercased())")
+                        if let devices = profile.provisionedDeviceCount {
+                            Text("\(devices) DEVICES")
+                                .font(T.mono(8))
+                                .foregroundColor(T.ink3)
+                        } else if profile.provisionsAllDevices == true {
+                            Text("ALL DEVICES")
                                 .font(T.mono(8))
                                 .foregroundColor(T.ink3)
                         }
@@ -139,8 +143,8 @@ struct ProfilesSheet: View {
                 Spacer(minLength: 8)
                 GlassStatusPill(text: expiry.text, color: expiry.tone.color(in: T))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .contentShape(Rectangle())
         }
         .buttonStyle(GlassTactileButtonStyle())
