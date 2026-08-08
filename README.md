@@ -7,8 +7,12 @@ On-device IPA re-signer for iPhone and iPad. Sign, install and manage IPAs entir
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
 <p align="center">
-  <img src="docs/screenshot.png" alt="ForgeSign Sign tab" width="320" />
+  <img src="docs/screenshot-sign.png" alt="ForgeSign Sign tab — on-device IPA signer" width="280" />
+  &nbsp;
+  <img src="docs/screenshot-library.png" alt="ForgeSign Library — signed app history" width="280" />
 </p>
+
+<p align="center"><sub>Certificate and provisioning identifiers are redacted in the Sign preview.</sub></p>
 
 ## Features
 
