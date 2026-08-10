@@ -14,6 +14,9 @@ ZMachO::ZMachO()
 
 ZMachO::~ZMachO()
 {
+	if (m_pBase != NULL && m_sSize > 0) {
+		CloseFile();
+	}
 	FreeArchOes();
 }
 
@@ -31,8 +34,9 @@ bool ZMachO::InitV(const char* szPath, ...)
 
 bool ZMachO::Free()
 {
+	bool bRet = CloseFile();
 	FreeArchOes();
-	return CloseFile();
+	return bRet;
 }
 
 bool ZMachO::NewArchO(uint8_t* pBase, uint32_t uLength)
@@ -117,6 +121,15 @@ bool ZMachO::CheckSignature() const
 	return std::all_of(m_arrArchOes.cbegin(), m_arrArchOes.cend(), 
 		[](ZArchO const * archo) {
 			return archo->IsSigned();
+		}
+	);
+}
+
+bool ZMachO::IsEncrypted() const
+{
+	return std::any_of(m_arrArchOes.cbegin(), m_arrArchOes.cend(),
+		[](ZArchO const * archo) {
+			return archo->m_bEncrypted;
 		}
 	);
 }

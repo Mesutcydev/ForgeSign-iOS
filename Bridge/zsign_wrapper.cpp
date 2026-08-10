@@ -230,6 +230,339 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
     return 0;
 }
 
+// Read-only IPA inspection used by the UI before signing. This deliberately
+// has its own bridge entry point: it extracts into a disposable folder and
+// never creates, modifies, signs, or repackages an IPA.
+static bool FSHasMachOMagic(const string& path)
+{
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) return false;
+    uint32_t magic = 0;
+    bool ok = (fread(&magic, sizeof(magic), 1, fp) == 1) &&
+              (magic == MH_MAGIC || magic == MH_CIGAM ||
+               magic == MH_MAGIC_64 || magic == MH_CIGAM_64 ||
+               magic == FAT_MAGIC || magic == FAT_CIGAM);
+    fclose(fp);
+    return ok;
+}
+
+static string FSFindPayloadApp(const string& folder)
+{
+    string payload = folder + "/Payload";
+    string appFolder;
+    ZFile::EnumFolder(payload.c_str(), false, NULL, [&](bool bFolder, const string& path) {
+        if (bFolder && ZFile::IsPathSuffix(path, ".app")) {
+            appFolder = path;
+            return true;
+        }
+        return false;
+    });
+    return appFolder;
+}
+
+static bool FSIsTopLevelAppExtension(const string& appFolder, const string& path)
+{
+    if (!ZFile::IsPathSuffix(path, ".appex") || path.size() <= appFolder.size() + 1) {
+        return false;
+    }
+    string relative = path.substr(appFolder.size() + 1);
+    if (1 != count(relative.begin(), relative.end(), '/')) {
+        return false;
+    }
+    return (0 == relative.rfind("PlugIns/", 0) ||
+            0 == relative.rfind("Extensions/", 0));
+}
+
+static bool FSInjectMachO(const string& path,
+                          const string& loadPath,
+                          string& error)
+{
+    if (!FSHasMachOMagic(path)) {
+        error = "Target is not a Mach-O executable: " + path;
+        return false;
+    }
+
+    ZMachO macho;
+    if (!macho.Init(path.c_str())) {
+        error = "Could not parse Mach-O executable: " + path;
+        return false;
+    }
+    if (macho.IsEncrypted()) {
+        error = "Encrypted Mach-O cannot be injected: " + path;
+        macho.Free();
+        return false;
+    }
+
+    bool injected = macho.InjectDylib(false, loadPath.c_str());
+    bool closed = macho.Free();
+    if (!injected || !closed) {
+        error = "Could not add the dylib load command. The executable may not have enough load-command space: " + path;
+        return false;
+    }
+    return true;
+}
+
+// Prepares a disposable IPA for the existing signing pass. The original IPA
+// is never modified and no provisioning/signature work happens here.
+extern "C" int forgesign_inject_dylib_ipa(const char* ipaPath,
+                                          const char* dylibPath,
+                                          const char* outputPath,
+                                          const char* tempFolder,
+                                          int injectExtensions,
+                                          char* msgBuf,
+                                          int msgBufLen)
+{
+    auto setMsg = [&](const string& message) {
+        if (msgBuf && msgBufLen > 0) {
+            snprintf(msgBuf, msgBufLen, "%s", message.c_str());
+        }
+    };
+
+    string strIpa = ipaPath ? ipaPath : "";
+    string strDylib = dylibPath ? dylibPath : "";
+    string strOutput = outputPath ? outputPath : "";
+    string strTemp = tempFolder ? tempFolder : "";
+
+    if (strIpa.empty() || strDylib.empty() || strOutput.empty() || strTemp.empty()) {
+        setMsg("Missing IPA, dylib, output, or temporary folder.");
+        return 1;
+    }
+    if (!ZFile::IsFileExists(strIpa.c_str()) || !ZFile::IsZipFile(strIpa.c_str())) {
+        setMsg("Input is not a valid IPA/zip.");
+        return 2;
+    }
+    if (!ZFile::IsFileExists(strDylib.c_str()) ||
+        !ZFile::IsPathSuffix(strDylib, ".dylib") ||
+        !FSHasMachOMagic(strDylib)) {
+        setMsg("The selected file is not a valid Mach-O .dylib.");
+        return 3;
+    }
+    if (!ZFile::IsFolder(strTemp.c_str())) {
+        setMsg("Invalid temporary folder.");
+        return 4;
+    }
+
+    ZMachO dylib;
+    if (!dylib.Init(strDylib.c_str())) {
+        setMsg("Could not parse the selected dylib.");
+        return 5;
+    }
+    if (dylib.IsEncrypted()) {
+        dylib.Free();
+        setMsg("The selected dylib is encrypted and cannot be injected.");
+        return 6;
+    }
+    dylib.Free();
+
+    string strFolder = ZFile::GetRealPathV("%s/fs_inject_%llu", strTemp.c_str(), ZUtil::GetMicroSecond());
+    if (!Zip::Extract(strIpa.c_str(), strFolder.c_str())) {
+        setMsg("Failed to extract IPA for dylib injection.");
+        return 7;
+    }
+
+    auto fail = [&](int code, const string& message) {
+        ZFile::RemoveFolder(strFolder.c_str());
+        setMsg(message);
+        return code;
+    };
+
+    string appFolder = FSFindPayloadApp(strFolder);
+    if (appFolder.empty()) {
+        return fail(8, "No Payload/*.app bundle was found.");
+    }
+
+    string dylibName = ZUtil::GetBaseName(strDylib.c_str());
+    if (dylibName.empty() || dylibName == "." || dylibName == "..") {
+        return fail(9, "Could not determine the dylib filename.");
+    }
+
+    string bundledDylib = appFolder + "/" + dylibName;
+    if (ZFile::IsFileExists(bundledDylib.c_str())) {
+        return fail(10, "The app already contains a file named " + dylibName + ". Rename the dylib before injecting.");
+    }
+    if (!ZFile::CopyFile(strDylib.c_str(), bundledDylib.c_str())) {
+        return fail(11, "Could not copy the dylib into the app bundle.");
+    }
+
+    string executable = FSReadPlistString(appFolder + "/Info.plist", "CFBundleExecutable");
+    if (executable.empty()) {
+        return fail(12, "The app bundle has no CFBundleExecutable.");
+    }
+
+    string error;
+    if (!FSInjectMachO(appFolder + "/" + executable,
+                       "@executable_path/" + dylibName,
+                       error)) {
+        return fail(13, error);
+    }
+
+    int injectedTargets = 1;
+    if (injectExtensions != 0) {
+        vector<string> extensions;
+        ZFile::EnumFolder(appFolder.c_str(), true, NULL, [&](bool bFolder, const string& path) {
+            if (bFolder && FSIsTopLevelAppExtension(appFolder, path)) {
+                extensions.push_back(path);
+            }
+            return false;
+        });
+
+        for (const string& extension : extensions) {
+            string extensionExecutable = FSReadPlistString(extension + "/Info.plist", "CFBundleExecutable");
+            if (extensionExecutable.empty()) {
+                return fail(14, "An app extension has no CFBundleExecutable: " + extension);
+            }
+
+            string relative = extension.substr(appFolder.size() + 1);
+            string prefix;
+            for (size_t i = 0, n = 1 + (size_t)count(relative.begin(), relative.end(), '/'); i < n; i++) {
+                prefix += "../";
+            }
+            string extensionLoadPath = "@executable_path/" + prefix + dylibName;
+            if (!FSInjectMachO(extension + "/" + extensionExecutable,
+                               extensionLoadPath,
+                               error)) {
+                return fail(15, error);
+            }
+            injectedTargets += 1;
+        }
+    }
+
+    size_t payloadPos = appFolder.rfind("Payload");
+    if (string::npos == payloadPos || 0 == payloadPos) {
+        return fail(16, "Could not locate the Payload directory after injection.");
+    }
+    string baseFolder = appFolder.substr(0, payloadPos - 1);
+    ZFile::RemoveFile(strOutput.c_str());
+    if (!Zip::Archive(baseFolder.c_str(), strOutput.c_str(), 0)) {
+        return fail(17, "Failed to package the IPA after dylib injection.");
+    }
+
+    ZFile::RemoveFolder(strFolder.c_str());
+    setMsg("Prepared IPA with " + dylibName + " in " + to_string(injectedTargets) + " executable(s).");
+    return 0;
+}
+
+extern "C" int forgesign_inspect_ipa(const char* ipaPath,
+                                      const char* tempFolder,
+                                      char* jsonBuf,
+                                      int jsonBufLen,
+                                      char* msgBuf,
+                                      int msgBufLen)
+{
+    auto setMsg = [&](const string& message) {
+        if (msgBuf && msgBufLen > 0) {
+            snprintf(msgBuf, msgBufLen, "%s", message.c_str());
+        }
+    };
+
+    string strIpa = ipaPath ? ipaPath : "";
+    string strTemp = tempFolder ? tempFolder : "";
+    if (strIpa.empty() || strTemp.empty()) {
+        setMsg("Missing IPA or temporary folder.");
+        return 1;
+    }
+    if (!ZFile::IsFileExists(strIpa.c_str())) {
+        setMsg("IPA not found.");
+        return 2;
+    }
+    if (!ZFile::IsZipFile(strIpa.c_str())) {
+        setMsg("Input is not a valid IPA/zip.");
+        return 3;
+    }
+    if (!ZFile::IsFolder(strTemp.c_str())) {
+        setMsg("Invalid temporary folder.");
+        return 4;
+    }
+
+    string strFolder = ZFile::GetRealPathV("%s/fs_inspect_%llu", strTemp.c_str(), ZUtil::GetMicroSecond());
+    if (!Zip::Extract(strIpa.c_str(), strFolder.c_str())) {
+        setMsg("Failed to extract IPA for inspection.");
+        return 5;
+    }
+
+    string appFolder = FSFindPayloadApp(strFolder);
+    if (appFolder.empty()) {
+        ZFile::RemoveFolder(strFolder.c_str());
+        setMsg("No Payload/*.app bundle was found.");
+        return 6;
+    }
+
+    jvalue result(jvalue::E_OBJECT);
+    string appName = FSReadPlistString(appFolder + "/Info.plist", "CFBundleDisplayName");
+    if (appName.empty()) appName = FSReadPlistString(appFolder + "/Info.plist", "CFBundleName");
+    if (appName.empty()) appName = ZUtil::GetBaseName(appFolder.c_str());
+
+    result["appName"] = appName;
+    result["bundleIdentifier"] = FSReadPlistString(appFolder + "/Info.plist", "CFBundleIdentifier");
+    result["shortVersion"] = FSReadPlistString(appFolder + "/Info.plist", "CFBundleShortVersionString");
+    result["buildVersion"] = FSReadPlistString(appFolder + "/Info.plist", "CFBundleVersion");
+    result["minimumOSVersion"] = FSReadPlistString(appFolder + "/Info.plist", "MinimumOSVersion");
+    result["nestedBundleCount"] = 0;
+    result["extensionCount"] = 0;
+    result["frameworkCount"] = 0;
+    result["watchAppCount"] = 0;
+    result["totalMachOCount"] = 0;
+    result["signedMachOCount"] = 0;
+    result["encryptedExecutableCount"] = 0;
+    result["encryptedPaths"] = jvalue(jvalue::E_ARRAY);
+
+    ZFile::EnumFolder(appFolder.c_str(), true, NULL, [&](bool bFolder, const string& path) {
+        if (bFolder) {
+            if (ZFile::IsPathSuffix(path, ".app") ||
+                ZFile::IsPathSuffix(path, ".appex") ||
+                ZFile::IsPathSuffix(path, ".framework") ||
+                ZFile::IsPathSuffix(path, ".xctest")) {
+                result["nestedBundleCount"] = result["nestedBundleCount"].as_int() + 1;
+            }
+            if (ZFile::IsPathSuffix(path, ".appex")) {
+                result["extensionCount"] = result["extensionCount"].as_int() + 1;
+            }
+            if (ZFile::IsPathSuffix(path, ".framework")) {
+                result["frameworkCount"] = result["frameworkCount"].as_int() + 1;
+            }
+            if (ZFile::IsPathSuffix(path, ".app") &&
+                (path.find("/Watch/") != string::npos ||
+                 path.find("/WatchKit/") != string::npos)) {
+                result["watchAppCount"] = result["watchAppCount"].as_int() + 1;
+            }
+            return false;
+        }
+
+        if (!ZFile::IsRegularFile(path.c_str()) || !FSHasMachOMagic(path)) {
+            return false;
+        }
+
+        ZMachO macho;
+        if (!macho.Init(path.c_str())) {
+            return false;
+        }
+
+        result["totalMachOCount"] = result["totalMachOCount"].as_int() + 1;
+        if (macho.CheckSignature()) {
+            result["signedMachOCount"] = result["signedMachOCount"].as_int() + 1;
+        }
+        if (macho.IsEncrypted()) {
+            result["encryptedExecutableCount"] = result["encryptedExecutableCount"].as_int() + 1;
+            if (result["encryptedPaths"].size() < 8) {
+                result["encryptedPaths"].push_back(path.substr(appFolder.size() + 1));
+            }
+        }
+        return false;
+    });
+
+    string json;
+    result.style_write(json);
+    if (!jsonBuf || jsonBufLen <= 0 || json.size() + 1 > (size_t)jsonBufLen) {
+        ZFile::RemoveFolder(strFolder.c_str());
+        setMsg("Inspection result was too large.");
+        return 7;
+    }
+    snprintf(jsonBuf, jsonBufLen, "%s", json.c_str());
+    ZFile::RemoveFolder(strFolder.c_str());
+    setMsg("IPA inspected.");
+    return 0;
+}
+
 // Validates a PKCS#12 with the same OpenSSL engine used for signing (the
 // system SecPKCS12Import rejects OpenSSL-3 style AES-256 p12 files) and
 // reports subject CN / O / OU plus the notAfter epoch for the UI.

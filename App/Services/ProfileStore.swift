@@ -5,7 +5,11 @@ struct ProfileRecord: Codable, Identifiable, Equatable {
     let filename: String
     let name: String?
     let teamID: String?
+    let applicationIdentifier: String?
     let notAfter: Date?
+    let provisionedDeviceCount: Int?
+    let provisionsAllDevices: Bool?
+    let getTaskAllow: Bool?
     let addedAt: Date
 
     var displayName: String { name ?? filename }
@@ -87,7 +91,11 @@ final class ProfileStore: ObservableObject {
             filename: filename,
             name: info.name,
             teamID: info.teamID,
+            applicationIdentifier: info.applicationIdentifier,
             notAfter: info.expirationDate,
+            provisionedDeviceCount: info.provisionedDeviceCount,
+            provisionsAllDevices: info.provisionsAllDevices,
+            getTaskAllow: info.getTaskAllow,
             addedAt: .now
         )
 
@@ -123,10 +131,11 @@ final class ProfileStore: ObservableObject {
 }
 
 /// Parses the plist embedded inside a signed .mobileprovision blob and pulls
-/// out the fields ForgeSign surfaces (name, team, expiry). The CMS signature
-/// itself is not verified here — zsign validates the profile when signing.
+/// out the identity, coverage, and expiry fields ForgeSign surfaces. The CMS
+/// signature itself is not verified here — zsign validates the profile when
+/// signing.
 enum ProvisioningProfileInspector {
-    static func inspect(data: Data) -> (name: String, teamID: String?, expirationDate: Date?)? {
+    static func inspect(data: Data) -> (name: String, teamID: String?, applicationIdentifier: String?, expirationDate: Date?, provisionedDeviceCount: Int?, provisionsAllDevices: Bool?, getTaskAllow: Bool?)? {
         // The DER/CMS wrapper around the payload is binary, so the whole file
         // can never be decoded as a String. Slice out the embedded plist by
         // its magic markers and let PropertyListSerialization parse it.
@@ -141,14 +150,21 @@ enum ProvisioningProfileInspector {
                 ?? (dict["ProfileName"] as? String)
                 ?? "Provisioning Profile"
 
+            let entitlements = dict["Entitlements"] as? [String: Any]
+            let entitlementTeamID = entitlements?["com.apple.developer.team-identifier"] as? String
             let teamID: String?
-            if let teamArray = dict["TeamIdentifier"] as? [String] {
-                teamID = teamArray.first
+            if let teamArray = dict["TeamIdentifier"] as? [String], let firstTeam = teamArray.first {
+                teamID = firstTeam
             } else {
-                teamID = dict["TeamIdentifier"] as? String
+                teamID = (dict["TeamIdentifier"] as? String) ?? entitlementTeamID
             }
 
-            return (name, teamID, dict["ExpirationDate"] as? Date)
+            let applicationIdentifier = entitlements?["application-identifier"] as? String
+            let provisionedDeviceCount = (dict["ProvisionedDevices"] as? [Any])?.count
+            let provisionsAllDevices = dict["ProvisionsAllDevices"] as? Bool
+            let getTaskAllow = entitlements?["get-task-allow"] as? Bool
+            return (name, teamID, applicationIdentifier, dict["ExpirationDate"] as? Date,
+                    provisionedDeviceCount, provisionsAllDevices, getTaskAllow)
         }
         return nil
     }

@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#edf2f8">
+  <meta name="description" content="ForgeSign is a calm, local-first IPA signing workflow for iPhone and iPad.">
+  <title>ForgeSign — Sign IPAs on-device</title>
+  <link rel="icon" href="./assets/forgesign-icon.png" type="image/png">
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #edf2f8;
+      --bg-soft: #f7f9fc;
+      --surface: rgba(255, 255, 255, .62);
+      --surface-strong: rgba(255, 255, 255, .84);
+      --surface-muted: rgba(232, 238, 246, .66);
+      --ink: #17202c;
+      --muted: #677487;
+      --faint: #8b98a8;
+      --line: rgba(41, 54, 72, .14);
+      --line-strong: rgba(41, 54, 72, .22);
+      --accent: #4b535e;
+      --accent-soft: #d9e1eb;
+      --blue: #91b2d7;
+      --lavender: #b9afd8;
+      --green: #6f9e88;
+      --shadow: 0 28px 80px rgba(50, 67, 91, .16);
+      --shadow-soft: 0 12px 36px rgba(50, 67, 91, .10);
+      --radius: 28px;
+      --max: 1180px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        color-scheme: dark;
+        --bg: #15181e;
+        --bg-soft: #1b1f27;
+        --surface: rgba(35, 40, 50, .68);
+        --surface-strong: rgba(47, 53, 64, .82);
+        --surface-muted: rgba(31, 36, 45, .78);
+        --ink: #f1f4f8;
+        --muted: #aeb8c6;
+        --faint: #7c8797;
+        --line: rgba(225, 233, 242, .14);
+        --line-strong: rgba(225, 233, 242, .24);
+        --accent: #d7dde5;
+        --accent-soft: #343b47;
+        --blue: #617e9f;
+        --lavender: #716a92;
+        --green: #6d9a83;
+        --shadow: 0 28px 80px rgba(0, 0, 0, .34);
+        --shadow-soft: 0 12px 36px rgba(0, 0, 0, .24);
+      }
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background: var(--bg);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", Inter, sans-serif;
+      line-height: 1.55;
+      letter-spacing: -.01em;
+      overflow-x: hidden;
+    }
+
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      z-index: -1;
+      width: 38rem;
+      height: 38rem;
+      border-radius: 50%;
+      filter: blur(12px);
+      opacity: .48;
+      pointer-events: none;
+    }
+
+    body::before {
+      top: -19rem;
+      left: -11rem;
+      background: radial-gradient(circle, rgba(145, 178, 215, .54), transparent 68%);
+    }
+
+    body::after {
+      right: -14rem;
+      top: 24rem;
+      background: radial-gradient(circle, rgba(185, 175, 216, .46), transparent 68%);
+    }
+
+    a { color: inherit; text-decoration: none; }
+    img { display: block; max-width: 100%; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+
+    .site-shell { width: min(calc(100% - 40px), var(--max)); margin: 0 auto; }
+
+    .glass {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .62), var(--shadow-soft);
+      -webkit-backdrop-filter: blur(24px) saturate(145%);
+      backdrop-filter: blur(24px) saturate(145%);
+    }
+
+    .site-nav {
+      position: sticky;
+      z-index: 10;
+      top: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      width: min(calc(100% - 40px), var(--max));
+      margin: 16px auto 0;
+      padding: 10px 12px 10px 16px;
+      border-radius: 22px;
+    }
+
+    .brand { display: inline-flex; align-items: center; gap: 11px; font-weight: 700; letter-spacing: -.03em; }
+    .brand img { width: 38px; height: 38px; border-radius: 12px; box-shadow: 0 5px 14px rgba(51, 61, 75, .18); }
+    .brand span { font-size: 1.05rem; }
+    .nav-links { display: flex; align-items: center; gap: 22px; color: var(--muted); font-size: .9rem; }
+    .nav-links a { transition: color .2s ease; }
+    .nav-links a:hover, .nav-links a:focus-visible { color: var(--ink); }
+    .nav-cta { padding: 9px 15px; border-radius: 13px; color: var(--ink); background: var(--surface-strong); border: 1px solid var(--line); font-weight: 650; }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.02fr) minmax(340px, .98fr);
+      align-items: center;
+      gap: clamp(42px, 7vw, 96px);
+      min-height: 710px;
+      padding: 96px 0 76px;
+    }
+
+    .eyebrow {
+      margin: 0 0 18px;
+      color: var(--muted);
+      font-size: .73rem;
+      font-weight: 750;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      margin-bottom: 21px;
+      padding: 7px 11px;
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      color: var(--muted);
+      background: var(--surface);
+      font-size: .72rem;
+      font-weight: 700;
+      letter-spacing: .11em;
+      text-transform: uppercase;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5);
+      -webkit-backdrop-filter: blur(16px);
+      backdrop-filter: blur(16px);
+    }
+
+    .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(111, 158, 136, .14); }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { max-width: 720px; margin-bottom: 23px; font-size: clamp(3.3rem, 7vw, 6.2rem); line-height: .96; letter-spacing: -.075em; font-weight: 760; }
+    .hero-copy { max-width: 570px; color: var(--muted); font-size: clamp(1.05rem, 1.7vw, 1.24rem); line-height: 1.55; }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 11px; margin-top: 30px; }
+    .button { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 47px; padding: 12px 17px; border-radius: 15px; border: 1px solid var(--line-strong); font-size: .91rem; font-weight: 700; transition: transform .2s ease, box-shadow .2s ease, background .2s ease; }
+    .button:hover, .button:focus-visible { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(46, 58, 75, .14); }
+    .button-primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+    .button-secondary { background: var(--surface-strong); }
+    .availability { display: flex; flex-wrap: wrap; gap: 17px; margin-top: 27px; color: var(--faint); font-size: .82rem; }
+    .availability span { display: inline-flex; align-items: center; gap: 7px; }
+    .availability span::before { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--faint); }
+
+    .hero-stage { position: relative; display: grid; place-items: center; min-height: 590px; }
+    .hero-stage::before { content: ""; position: absolute; inset: 10% 2% 9%; border-radius: 48% 52% 42% 58%; background: radial-gradient(circle at 40% 30%, rgba(145, 178, 215, .35), transparent 52%), radial-gradient(circle at 72% 64%, rgba(185, 175, 216, .32), transparent 54%); filter: blur(4px); }
+    .device {
+      position: relative;
+      width: min(77%, 350px);
+      padding: 9px;
+      border-radius: 42px;
+      background: linear-gradient(145deg, rgba(255,255,255,.82), rgba(185, 194, 207, .46));
+      border: 1px solid rgba(255,255,255,.82);
+      box-shadow: 0 34px 70px rgba(41, 55, 74, .22), inset 0 1px 0 rgba(255,255,255,.9);
+      transform: rotate(2.5deg);
+    }
+    .device::before { content: ""; position: absolute; top: 17px; left: 50%; z-index: 2; width: 30%; height: 23px; transform: translateX(-50%); border-radius: 99px; background: #090a0c; box-shadow: 0 1px 0 rgba(255,255,255,.12); }
+    .device-screen { overflow: hidden; border-radius: 34px; background: #0d0f12; aspect-ratio: 1320 / 2868; }
+    .device-screen img { width: 100%; height: 100%; object-fit: cover; }
+    .device-glint { position: absolute; top: 5%; right: 8%; width: 28%; height: 58%; border-radius: 99px; transform: rotate(18deg); background: linear-gradient(180deg, rgba(255,255,255,.28), transparent 63%); opacity: .35; pointer-events: none; }
+    .stage-note { position: absolute; right: -1%; bottom: 11%; max-width: 185px; padding: 15px 16px; border-radius: 19px; color: var(--muted); background: var(--surface-strong); border: 1px solid var(--line); box-shadow: var(--shadow-soft); font-size: .78rem; line-height: 1.4; -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
+    .stage-note strong { display: block; margin-bottom: 4px; color: var(--ink); font-size: .82rem; }
+
+    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; overflow: hidden; border-radius: var(--radius); }
+    .metric { min-height: 130px; padding: 25px 26px; background: var(--surface); border-right: 1px solid var(--line); }
+    .metric:last-child { border-right: 0; }
+    .metric strong { display: block; margin-bottom: 5px; font-size: 1.5rem; letter-spacing: -.045em; }
+    .metric span { color: var(--muted); font-size: .83rem; }
+
+    .section { padding: 142px 0 0; }
+    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 28px; margin-bottom: 34px; }
+    .section-head h2 { max-width: 640px; margin-bottom: 0; font-size: clamp(2.2rem, 4.3vw, 4rem); line-height: .99; letter-spacing: -.065em; }
+    .section-lede { max-width: 390px; margin-bottom: 4px; color: var(--muted); font-size: .98rem; }
+
+    .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .feature-card { min-height: 245px; padding: 25px; border-radius: var(--radius); }
+    .feature-index { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; margin-bottom: 38px; border-radius: 11px; color: var(--ink); background: var(--accent-soft); font-size: .75rem; font-weight: 750; }
+    .feature-card h3 { margin-bottom: 9px; font-size: 1.17rem; letter-spacing: -.035em; }
+    .feature-card p { margin-bottom: 0; color: var(--muted); font-size: .9rem; line-height: 1.5; }
+
+    .workflow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; overflow: hidden; border-radius: var(--radius); }
+    .workflow-step { position: relative; min-height: 224px; padding: 26px 23px; background: var(--surface); border-right: 1px solid var(--line); }
+    .workflow-step:last-child { border-right: 0; }
+    .workflow-step::after { content: "→"; position: absolute; top: 25px; right: 19px; color: var(--faint); font-size: 1.2rem; }
+    .workflow-step:last-child::after { display: none; }
+    .workflow-number { color: var(--faint); font-size: .74rem; font-weight: 750; letter-spacing: .12em; }
+    .workflow-step h3 { margin: 60px 0 8px; font-size: 1.1rem; letter-spacing: -.035em; }
+    .workflow-step p { margin-bottom: 0; color: var(--muted); font-size: .86rem; line-height: 1.45; }
+
+    .gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; align-items: start; }
+    .gallery-card { overflow: hidden; border-radius: var(--radius); }
+    .gallery-card img { width: 100%; aspect-ratio: 1320 / 2868; object-fit: cover; object-position: top; background: #111; }
+    .gallery-caption { padding: 17px 18px 19px; background: var(--surface); border-top: 1px solid var(--line); }
+    .gallery-caption strong { display: block; margin-bottom: 4px; font-size: .97rem; }
+    .gallery-caption span { color: var(--muted); font-size: .81rem; }
+
+    .release-panel { display: grid; grid-template-columns: 1fr .9fr; gap: 34px; align-items: center; padding: clamp(28px, 5vw, 58px); border-radius: 34px; background: linear-gradient(135deg, rgba(255,255,255,.72), rgba(221, 229, 239, .52)); }
+    .release-panel h2 { max-width: 550px; margin-bottom: 15px; font-size: clamp(2rem, 4vw, 3.65rem); line-height: 1; letter-spacing: -.06em; }
+    .release-panel p { max-width: 530px; margin-bottom: 0; color: var(--muted); }
+    .release-list { display: grid; gap: 11px; }
+    .release-item { display: grid; grid-template-columns: 24px 1fr; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); font-size: .91rem; }
+    .release-item:last-child { border-bottom: 0; }
+    .release-item b { color: var(--green); font-size: .9rem; }
+
+    .review-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .review-card { min-height: 220px; padding: 25px; border-radius: var(--radius); }
+    .review-mark { display: block; margin-bottom: 46px; color: var(--faint); font-size: .75rem; font-weight: 750; letter-spacing: .13em; }
+    .review-card h3 { margin-bottom: 9px; font-size: 1.12rem; }
+    .review-card p { margin-bottom: 0; color: var(--muted); font-size: .9rem; }
+
+    .faq { display: grid; grid-template-columns: .7fr 1.3fr; gap: 70px; align-items: start; }
+    .faq h2 { margin-bottom: 0; font-size: clamp(2.3rem, 4vw, 3.8rem); line-height: .98; letter-spacing: -.065em; }
+    details { padding: 17px 0; border-bottom: 1px solid var(--line); }
+    summary { cursor: pointer; list-style: none; font-size: 1rem; font-weight: 650; }
+    summary::-webkit-details-marker { display: none; }
+    summary::after { content: "+"; float: right; color: var(--faint); font-size: 1.3rem; font-weight: 400; }
+    details[open] summary::after { content: "−"; }
+    details p { max-width: 620px; margin: 11px 0 3px; color: var(--muted); font-size: .9rem; }
+
+    .final-cta { display: flex; align-items: center; justify-content: space-between; gap: 25px; padding: 32px; border-radius: var(--radius); }
+    .final-cta h2 { margin-bottom: 6px; font-size: 1.6rem; letter-spacing: -.05em; }
+    .final-cta p { margin-bottom: 0; color: var(--muted); font-size: .9rem; }
+    footer { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 58px 0 38px; color: var(--faint); font-size: .82rem; }
+    .footer-links { display: flex; flex-wrap: wrap; gap: 18px; }
+    .footer-links a:hover, .footer-links a:focus-visible { color: var(--ink); }
+
+    @media (prefers-reduced-transparency: reduce) {
+      .glass, .pill, .stage-note, .button-secondary, .metric, .workflow-step, .gallery-caption, .review-card, .final-cta { background: var(--surface-strong); -webkit-backdrop-filter: none; backdrop-filter: none; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+
+    @media (max-width: 860px) {
+      .nav-links a:not(.nav-cta) { display: none; }
+      .hero { grid-template-columns: 1fr; padding-top: 74px; }
+      .hero-stage { min-height: 520px; }
+      .device { width: min(74%, 330px); }
+      .feature-grid, .review-grid { grid-template-columns: repeat(2, 1fr); }
+      .workflow { grid-template-columns: repeat(2, 1fr); }
+      .workflow-step:nth-child(2) { border-right: 0; }
+      .workflow-step:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+      .workflow-step:nth-child(2)::after { display: none; }
+      .release-panel, .faq { grid-template-columns: 1fr; gap: 30px; }
+      .faq { gap: 32px; }
+    }
+
+    @media (max-width: 560px) {
+      .site-shell, .site-nav { width: min(calc(100% - 28px), var(--max)); }
+      .site-nav { top: 10px; margin-top: 10px; }
+      .nav-cta { padding: 8px 11px; font-size: .78rem; }
+      .hero { min-height: auto; padding: 68px 0 54px; }
+      h1 { font-size: clamp(3rem, 16vw, 4.3rem); }
+      .hero-stage { min-height: 440px; }
+      .stage-note { right: -4%; bottom: 5%; }
+      .metrics, .feature-grid, .review-grid, .gallery, .workflow { grid-template-columns: 1fr; }
+      .metric { border-right: 0; border-bottom: 1px solid var(--line); }
+      .metric:last-child { border-bottom: 0; }
+      .feature-card { min-height: 205px; }
+      .feature-index { margin-bottom: 31px; }
+      .workflow-step { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      .workflow-step:last-child { border-bottom: 0; }
+      .workflow-step::after { display: none; }
+      .workflow-step h3 { margin-top: 35px; }
+      .gallery-card img { aspect-ratio: 1320 / 2868; }
+      .section { padding-top: 100px; }
+      .section-head { display: block; }
+      .section-lede { margin-top: 15px; }
+      .final-cta, footer { display: block; }
+      .final-cta .button { margin-top: 19px; }
+      .footer-links { margin-top: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="site-nav glass" aria-label="Main navigation">
+    <a class="brand" href="./" aria-label="ForgeSign home">
+      <img src="./assets/forgesign-icon.png" alt="">
+      <span>ForgeSign</span>
+    </a>
+    <div class="nav-links">
+      <a href="#features">Features</a>
+      <a href="#screens">Screens</a>
+      <a href="#faq">FAQ</a>
+      <a class="nav-cta" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.1/ForgeSign-1.1.ipa">Get v1.1</a>
+    </div>
+  </nav>
+
+  <main>
+    <div class="site-shell">
+      <section class="hero" aria-labelledby="hero-title">
+        <div>
+          <div class="pill">Version 1.1 · open source</div>
+          <p class="eyebrow">On-device IPA signer</p>
+          <h1 id="hero-title">The calmer way to sign.</h1>
+          <p class="hero-copy">ForgeSign brings a focused signing, install, and library workflow to iPhone and iPad. Choose your materials, see what is ready, and keep the pass local.</p>
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.1/ForgeSign-1.1.ipa">Download unsigned IPA <span aria-hidden="true">↗</span></a>
+            <a class="button button-secondary" href="https://github.com/Mesutcydev/ForgeSign-iOS">View source</a>
+          </div>
+          <div class="availability" aria-label="Availability">
+            <span>iOS 16+</span>
+            <span>No account</span>
+            <span>Local-first</span>
+          </div>
+        </div>
+        <div class="hero-stage" aria-label="ForgeSign Library screen preview">
+          <div class="device">
+            <div class="device-screen"><img src="./screens/screenshot-library-dark.png" alt="ForgeSign Library screen in dark mode"></div>
+            <div class="device-glint" aria-hidden="true"></div>
+          </div>
+          <div class="stage-note"><strong>Designed around the pass</strong>Preflight, sign, install, and return to your library without losing the thread.</div>
+        </div>
+      </section>
+
+      <section class="metrics glass" aria-label="ForgeSign highlights">
+        <div class="metric"><strong>On-device</strong><span>Files and signing stay in your workflow.</span></div>
+        <div class="metric"><strong>1.1</strong><span>Preflight, Sources, and optional injection.</span></div>
+        <div class="metric"><strong>16+</strong><span>Built for iPhone and iPad.</span></div>
+        <div class="metric"><strong>Open</strong><span>Inspect the project on GitHub.</span></div>
+      </section>
+
+      <section class="section" aria-labelledby="release-title">
+        <div class="release-panel glass">
+          <div>
+            <p class="eyebrow">Latest release · Version 1.1</p>
+            <h2 id="release-title">More visibility before you commit.</h2>
+            <p>ForgeSign 1.1 adds the tools around the signing pass while preserving the existing signing and installing routes that already work.</p>
+            <div class="hero-actions"><a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.1">Read release notes</a></div>
+          </div>
+          <div class="release-list" aria-label="Version 1.1 changes">
+            <div class="release-item"><b>✓</b><span>Preflight card for package, encryption, bundle, and architecture checks.</span></div>
+            <div class="release-item"><b>✓</b><span>Optional dylib injection with app-extension support.</span></div>
+            <div class="release-item"><b>✓</b><span>Sources tab for repository feeds and direct IPA handoff.</span></div>
+            <div class="release-item"><b>✓</b><span>Lighter glass surfaces with adaptive light and dark themes.</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="screens" aria-labelledby="screens-title">
+        <div class="section-head">
+          <div><p class="eyebrow">New in 1.1 · Dark-mode review</p><h2 id="screens-title">A closer look at the new screens.</h2></div>
+          <p class="section-lede">The app stays glassy and legible in dark mode, with the same information hierarchy across each tab.</p>
+        </div>
+        <div class="gallery">
+          <figure class="gallery-card glass"><img src="./screens/screenshot-sign-dark.png" alt="ForgeSign Sign tab in dark mode" loading="lazy"><figcaption class="gallery-caption"><strong>Sign</strong><span>Keep the core inputs and optional injection in one pass.</span></figcaption></figure>
+          <figure class="gallery-card glass"><img src="./screens/screenshot-sources-dark.png" alt="ForgeSign Sources tab in dark mode" loading="lazy"><figcaption class="gallery-caption"><strong>Sources</strong><span>Save feeds and hand a selected IPA into signing.</span></figcaption></figure>
+          <figure class="gallery-card glass"><img src="./screens/screenshot-library-dark.png" alt="ForgeSign Library tab in dark mode" loading="lazy"><figcaption class="gallery-caption"><strong>Library</strong><span>Return to signed history when the work is done.</span></figcaption></figure>
+        </div>
+      </section>
+
+      <section class="section" id="features" aria-labelledby="features-title">
+        <div class="section-head">
+          <div><p class="eyebrow">A complete signing pass</p><h2 id="features-title">Small details that remove friction.</h2></div>
+          <p class="section-lede">The interface stays quiet until you need a decision, then puts the next useful action in reach.</p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature-card glass"><span class="feature-index">01</span><h3>Sign on-device</h3><p>Bring an IPA, certificate, and profile to the device. The existing zsign workflow handles the signing pass locally.</p></article>
+          <article class="feature-card glass"><span class="feature-index">02</span><h3>Preflight first</h3><p>See package, bundle, encryption, and architecture signals before committing to a signing run.</p></article>
+          <article class="feature-card glass"><span class="feature-index">03</span><h3>Remembered certificates</h3><p>Keep validated certificate details and optional passwords available for repeat signing without re-entering everything.</p></article>
+          <article class="feature-card glass"><span class="feature-index">04</span><h3>Optional dylib injection</h3><p>Opt in to compatible decrypted Mach-O dylibs, with a separate app-extension toggle, before the normal signer runs.</p></article>
+          <article class="feature-card glass"><span class="feature-index">05</span><h3>Sources that hand off</h3><p>Save repository feeds, inspect available IPAs, and send a selected download into the same signing flow.</p></article>
+          <article class="feature-card glass"><span class="feature-index">06</span><h3>Library and install</h3><p>Keep signed history together with reinstall, share, delete, and the existing semi-local install path.</p></article>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="workflow-title">
+        <div class="section-head">
+          <div><p class="eyebrow">The rhythm</p><h2 id="workflow-title">Inspect. Prepare. Sign. Install.</h2></div>
+          <p class="section-lede">Optional tools stay beside the core pass, so the familiar signing route remains familiar.</p>
+        </div>
+        <div class="workflow glass">
+          <article class="workflow-step"><span class="workflow-number">01</span><h3>Inspect</h3><p>Choose an IPA and read the preflight signals before signing.</p></article>
+          <article class="workflow-step"><span class="workflow-number">02</span><h3>Prepare</h3><p>Add a certificate, profile, and any optional bundle or dylib choices.</p></article>
+          <article class="workflow-step"><span class="workflow-number">03</span><h3>Sign</h3><p>Run the on-device signer and save the result to the library.</p></article>
+          <article class="workflow-step"><span class="workflow-number">04</span><h3>Install</h3><p>Use the existing install action when the signed app is ready.</p></article>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="review-title">
+        <div class="section-head">
+          <div><p class="eyebrow">Workflow review</p><h2 id="review-title">What the new screens make obvious.</h2></div>
+          <p class="section-lede">A product review of the interaction itself: fewer hidden steps, clearer boundaries, and a library you can return to.</p>
+        </div>
+        <div class="review-grid">
+          <article class="review-card glass"><span class="review-mark">01 / CLARITY</span><h3>Preflight before commitment</h3><p>The IPA gets a quick read before the signing action, so a missing or unsuitable input is visible earlier.</p></article>
+          <article class="review-card glass"><span class="review-mark">02 / CONTROL</span><h3>Optional means optional</h3><p>Dylib injection and app-extension handling are surfaced as an opt-in layer around the unchanged normal route.</p></article>
+          <article class="review-card glass"><span class="review-mark">03 / CONTINUITY</span><h3>Finish where you started</h3><p>Sources feed the same signer, while Library keeps signed history close for the next install or share.</p></article>
+        </div>
+      </section>
+
+      <section class="section" id="faq" aria-labelledby="faq-title">
+        <div class="faq">
+          <div><p class="eyebrow">Questions, answered</p><h2 id="faq-title">Keep the edges clear.</h2></div>
+          <div>
+            <details open><summary>Is the downloaded IPA signed?</summary><p>No. The release is intentionally unsigned so you can sign it with your own certificate and provisioning profile before installing.</p></details>
+            <details><summary>What does 1.1 add?</summary><p>Preflight reporting, optional dylib injection with an app-extension toggle, a Sources tab, and the lighter glass visual system. The existing signing and installing logic remains in place.</p></details>
+            <details><summary>What kind of dylib can be injected?</summary><p>Use a compatible, decrypted Mach-O dylib that matches the target architecture. Injection is performed on a disposable IPA copy before the existing signer; the original input is left untouched.</p></details>
+            <details><summary>Does ForgeSign upload my files?</summary><p>The signing workflow is designed to run on-device. You remain responsible for the source IPAs, certificates, profiles, and modifications you choose to use.</p></details>
+            <details><summary>Where is the source?</summary><p>ForgeSign is developed in public on <a href="https://github.com/Mesutcydev/ForgeSign-iOS"><u>GitHub</u></a>. Issues and release notes live there too.</p></details>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" aria-label="Download ForgeSign">
+        <div class="final-cta glass">
+          <div><h2>Ready for a quieter signing pass?</h2><p>Download ForgeSign 1.1 and bring your own signing materials.</p></div>
+          <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.1/ForgeSign-1.1.ipa">Get ForgeSign 1.1 <span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+
+      <footer>
+        <span>© <span id="year">2026</span> ForgeSign</span>
+        <div class="footer-links"><a href="https://github.com/Mesutcydev/ForgeSign-iOS">GitHub</a><a href="https://mesut.uk/apps/forgesign">mesut.uk</a><a href="#hero-title">Back to top ↑</a></div>
+      </footer>
+    </div>
+  </main>
+  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body>
+</html>

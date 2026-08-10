@@ -18,7 +18,6 @@ struct CertificatesSheet: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                ForgeBackdrop()
                 ScrollView {
                     VStack(spacing: 0) {
                         header
@@ -45,13 +44,14 @@ struct CertificatesSheet: View {
                         GlassSecondaryButton(label: "Import Certificate…", systemImage: "plus") {
                             showImporter = true
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 20)
+                        .padding(.horizontal, T.pad)
+                        .padding(.top, 24)
                     }
                     .padding(.bottom, 30)
                 }
                 .scrollIndicators(.hidden)
                 .scrollContentBackground(.hidden)
+                .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
                 .fileImporter(isPresented: $showImporter,
                               allowedContentTypes: [.pkcs12, UTType(filenameExtension: "pfx") ?? .pkcs12]) { result in
@@ -81,12 +81,12 @@ struct CertificatesSheet: View {
             }
             .buttonStyle(GlassTactileButtonStyle())
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 20)
+        .padding(.horizontal, T.pad)
+        .padding(.top, 24)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: T.gap) {
             Image(systemName: "key.fill")
                 .font(.system(size: 20))
                 .foregroundColor(T.ink3)
@@ -97,14 +97,14 @@ struct CertificatesSheet: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
-        .padding(.horizontal, 16)
+        .padding(.horizontal, T.pad)
         .fGlass(cornerRadius: 16)
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(T.rule, lineWidth: AppStroke.hairline)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 20)
+        .padding(.horizontal, T.pad)
+        .padding(.top, 24)
     }
 
     private func row(_ cert: CertificateRecord) -> some View {
@@ -120,15 +120,20 @@ struct CertificatesSheet: View {
                     .foregroundColor(isSelected ? T.accent : T.ink4)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(cert.displayName)
-                        .font(T.sans(15))
+                        .font(T.sans(15, .medium))
                         .foregroundColor(T.ink)
                         .lineLimit(1)
                     HStack(spacing: 6) {
-                        Text(cert.filename)
+                        Text(cert.organization ?? cert.filename)
                             .font(T.mono(10))
                             .foregroundColor(T.ink3)
                             .lineLimit(1)
                             .truncationMode(.middle)
+                        if let team = cert.teamID {
+                            Text("TEAM \(team.uppercased())")
+                                .font(T.mono(8))
+                                .foregroundColor(T.ink3)
+                        }
                         if cert.hasSavedPassword {
                             Image(systemName: "lock.fill")
                                 .font(.system(size: 8))
@@ -139,8 +144,8 @@ struct CertificatesSheet: View {
                 Spacer(minLength: 8)
                 GlassStatusPill(text: expiry.text, color: expiry.tone.color(in: T))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .contentShape(Rectangle())
         }
         .buttonStyle(GlassTactileButtonStyle())
@@ -150,7 +155,7 @@ struct CertificatesSheet: View {
     }
 
     private func verifyCard(_ url: URL) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: T.gap) {
             HStack(spacing: 10) {
                 Image(systemName: "key.fill")
                     .font(.system(size: 13, weight: .medium))
@@ -180,7 +185,7 @@ struct CertificatesSheet: View {
 
             HStack(spacing: 12) {
                 Text("Remember password in Keychain")
-                    .font(T.sans(13))
+                    .font(T.sans(13, .medium))
                     .foregroundColor(T.ink)
                 Spacer(minLength: 8)
                 GlassToggle(isOn: $rememberPassword)
@@ -204,14 +209,14 @@ struct CertificatesSheet: View {
                 }
             }
         }
-        .padding(14)
+        .padding(16)
         .fGlass(cornerRadius: 16)
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(T.rule, lineWidth: AppStroke.hairline)
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 20)
+        .padding(.horizontal, T.pad)
+        .padding(.top, 24)
     }
 
     private func verify(_ url: URL) {

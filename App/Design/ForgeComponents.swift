@@ -19,7 +19,7 @@ struct GlassTactileButtonStyle: ButtonStyle {
 struct MonoText: View {
     let text: String
     var size: CGFloat = 11
-    var weight: Font.Weight = .regular
+    var weight: Font.Weight = .medium
     var color: Color? = nil
     var tracking: CGFloat = 0
 
@@ -44,7 +44,7 @@ struct CaptionText: View {
         Text(text.uppercased())
             .font(T.sans(11, .bold))
             .foregroundColor(color ?? T.ink3)
-            .tracking(0)
+            .tracking(0.4)
     }
 }
 
@@ -69,8 +69,8 @@ struct GlassPrimaryButton: View {
                 Text(label).font(T.sans(15, .semibold))
             }
             .foregroundColor(T.isDark ? .white : T.ink)
-            .padding(.horizontal, 14)
-            .frame(height: 50)
+            .padding(.horizontal, 16)
+            .frame(height: 52)
             .frame(maxWidth: .infinity)
             .glassSurface(.button)
             .overlay {
@@ -101,15 +101,15 @@ struct GlassSecondaryButton: View {
                         .font(.system(size: 13))
                         .foregroundColor(destructive ? T.bad : T.ink)
                 }
-                Text(label).font(T.sans(13.5))
+                Text(label).font(T.sans(13.5, .semibold))
                     .foregroundColor(destructive ? T.bad : T.ink)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(T.ink4)
             }
-            .padding(.horizontal, 14)
-            .frame(height: 44)
+            .padding(.horizontal, 16)
+            .frame(height: 52)
             .frame(maxWidth: .infinity)
             .glassSurface(.button)
             .overlay {
@@ -140,7 +140,7 @@ struct GlassSection<Content: View>: View {
                 CaptionText(text: title)
                 Rectangle().fill(T.rule).frame(height: 1)
             }
-            .padding(.bottom, 8)
+            .padding(.bottom, 10)
 
             VStack(spacing: 0) { content() }
                 .glassSurface(.card, cornerRadius: 18)
@@ -149,8 +149,8 @@ struct GlassSection<Content: View>: View {
                         .stroke(T.rule, lineWidth: AppStroke.hairline)
                 }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 20)
+        .padding(.horizontal, T.pad)
+        .padding(.top, 24)
     }
 }
 
@@ -172,13 +172,13 @@ struct GlassRow<Trailing: View>: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(label).font(T.sans(15)).foregroundColor(T.ink)
+            Text(label).font(T.sans(15, .medium)).foregroundColor(T.ink)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             trailing()
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
     }
 }
 
@@ -198,7 +198,7 @@ struct GlassFileRow: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(T.accent2)
                     .frame(width: 22)
-                Text(label).font(T.sans(15)).foregroundColor(T.ink)
+                Text(label).font(T.sans(15, .medium)).foregroundColor(T.ink)
                 Spacer(minLength: 8)
                 Text(file?.lastPathComponent ?? "Choose…")
                     .font(file == nil ? T.sans(13) : T.mono(12))
@@ -210,8 +210,8 @@ struct GlassFileRow: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(T.ink4)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
             .contentShape(Rectangle())
         }
         .buttonStyle(GlassTactileButtonStyle())
@@ -234,7 +234,7 @@ struct GlassInputRow: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(T.accent2)
                 .frame(width: 22)
-            Text(label).font(T.sans(15)).foregroundColor(T.ink)
+            Text(label).font(T.sans(15, .medium)).foregroundColor(T.ink)
             Spacer(minLength: 8)
             Group {
                 if isSecure {
@@ -251,8 +251,8 @@ struct GlassInputRow: View {
             .multilineTextAlignment(.trailing)
             .frame(maxWidth: 170)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
     }
 }
 
@@ -265,13 +265,13 @@ struct GlassToggleRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Text(label).font(T.sans(15)).foregroundColor(T.ink)
+            Text(label).font(T.sans(15, .medium)).foregroundColor(T.ink)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
             GlassToggle(isOn: $isOn)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
     }
 }
 
