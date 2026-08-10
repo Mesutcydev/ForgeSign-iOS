@@ -1,0 +1,33 @@
+workflows:
+  ios-build:
+    name: ForgeSign iOS Build
+    instance_type: mac_mini_m2
+    max_build_duration: 120
+
+    environment:
+      xcode: latest
+
+    scripts:
+      - name: Install XcodeGen
+        script: |
+          brew install xcodegen
+
+      - name: Generate Xcode project
+        script: |
+          xcodegen generate
+
+      - name: Build ForgeSign
+        script: |
+          xcodebuild \
+            -project "ForgeSignMobile.xcodeproj" \
+            -scheme "ForgeSignMobile" \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+    artifacts:
+      - $HOME/Library/Developer/Xcode/DerivedData/**/Build/**/*.app
+      - /tmp/xcodebuild_logs/*.log
