@@ -2,7 +2,7 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign, install and manage IPAs entirely on the device — no computer, no server, no uploads.
 
-**[Explore the ForgeSign 1.1 site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download the unsigned IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.1/ForgeSign-1.1.ipa)**
+**[Explore the ForgeSign 1.1 site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download the latest unsigned IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)**
 
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
