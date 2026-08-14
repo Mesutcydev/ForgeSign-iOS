@@ -2,6 +2,43 @@ import Foundation
 import Darwin
 import os
 
+enum LocalHTTPRange: Equatable {
+    case absent
+    case bounded(start: UInt64, end: UInt64)
+    case openEnded(start: UInt64)
+    case suffix(UInt64)
+    case invalid
+
+    static func parse(_ header: String?) -> LocalHTTPRange {
+        guard let header else { return .absent }
+        let value = header.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.lowercased().hasPrefix("bytes=") else { return .invalid }
+        let spec = String(value.dropFirst(6))
+        guard !spec.contains(",") else { return .invalid }
+        let parts = spec.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return .invalid }
+        if parts[0].isEmpty {
+            guard let suffix = UInt64(parts[1]), suffix > 0 else { return .invalid }
+            return .suffix(suffix)
+        }
+        guard let start = UInt64(parts[0]) else { return .invalid }
+        if parts[1].isEmpty { return .openEnded(start: start) }
+        guard let end = UInt64(parts[1]) else { return .invalid }
+        return .bounded(start: start, end: end)
+    }
+}
+
+enum LocalHTTPRoute {
+    static func request(_ requestLine: String) -> (method: String, path: String)? {
+        let parts = requestLine.split(separator: " ", omittingEmptySubsequences: true)
+        guard parts.count == 3, parts[2] == "HTTP/1.0" || parts[2] == "HTTP/1.1" else { return nil }
+        let rawTarget = String(parts[1])
+        let path = rawTarget.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        guard path.hasPrefix("/") else { return nil }
+        return (String(parts[0]).uppercased(), path)
+    }
+}
+
 /// Local OTA install server (semi-local, Feather-style).
 ///
 /// `itms-services` requires an HTTPS manifest URL that iOS trusts. The public
@@ -159,112 +196,125 @@ final class LocalInstallServer: @unchecked Sendable {
             return
         }
 
-        let lines = request.split(separator: "\r\n").map(String.init)
-        let firstLine = lines.first ?? ""
-        let parts = firstLine.split(separator: " ").map(String.init)
-        let method = parts.first ?? "GET"
-        let path = parts.count > 1 ? parts[1] : "/"
-        let headOnly = method == "HEAD"
-
-        // The iOS installer retries with `Range:` on flaky connections; honour
-        // single-range byte requests so downloads resume instead of restarting.
-        var range: (start: UInt64, end: UInt64?)?
-        for line in lines.dropFirst() {
-            let lowered = line.lowercased()
-            if lowered.hasPrefix("range: bytes=") {
-                let spec = line.dropFirst("range: bytes=".count)
-                let halves = spec.split(separator: "-", maxSplits: 1).map(String.init)
-                if halves.count == 2, let start = UInt64(halves[0]) {
-                    range = (start, UInt64(halves[1]))
-                }
-            }
+        let lines = request.components(separatedBy: "\r\n")
+        guard let firstLine = lines.first,
+              let route = LocalHTTPRoute.request(firstLine) else {
+            sendResponse(fd, status: "400 Bad Request", contentType: "text/plain", body: Data("bad request".utf8), headOnly: false)
+            return
         }
+        let method = route.method
+        let path = route.path
+        guard method == "GET" || method == "HEAD" else {
+            sendResponse(fd, status: "405 Method Not Allowed", contentType: "text/plain", body: Data("method not allowed".utf8), headOnly: false, extraHeaders: "Allow: GET, HEAD\r\n")
+            return
+        }
+        let headOnly = method == "HEAD"
+        let rangeHeader = lines.dropFirst().compactMap { line -> String? in
+            let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2, parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "range" else { return nil }
+            return String(parts[1]).trimmingCharacters(in: .whitespaces)
+        }.first
+        let range = LocalHTTPRange.parse(rangeHeader)
 
-        if path.hasPrefix("/app.ipa") {
-            if let ipa = ipaURL, FileManager.default.fileExists(atPath: ipa.path) {
-                sendFile(fd, url: ipa, headOnly: headOnly, range: range)
-            } else {
-                sendResponse(fd, status: "404 Not Found", contentType: "text/plain",
-                             body: Data("not found".utf8), headOnly: false)
+        switch path {
+        case "/app.ipa":
+            guard let ipa = ipaURL, FileManager.default.fileExists(atPath: ipa.path) else {
+                sendResponse(fd, status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8), headOnly: false)
+                return
             }
-        } else if path.hasPrefix("/install") {
-            sendResponse(fd, status: "200 OK", contentType: "text/html",
-                         body: Data(installPage().utf8), headOnly: false)
-        } else if path.hasPrefix("/health") {
-            sendResponse(fd, status: "200 OK", contentType: "text/plain",
-                         body: Data("ok".utf8), headOnly: headOnly)
-        } else {
-            sendResponse(fd, status: "404 Not Found", contentType: "text/plain",
-                         body: Data("not found".utf8), headOnly: false)
+            sendFile(fd, url: ipa, headOnly: headOnly, range: range)
+        case "/install":
+            sendResponse(fd, status: "200 OK", contentType: "text/html", body: Data(installPage().utf8), headOnly: headOnly)
+        case "/health":
+            sendResponse(fd, status: "200 OK", contentType: "text/plain", body: Data("ok".utf8), headOnly: headOnly)
+        default:
+            sendResponse(fd, status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8), headOnly: false)
         }
     }
 
     var onIPADelivered: (() -> Void)?
+    private var didDeliverIPA = false
 
-    private func sendAll(_ fd: Int32, _ data: Data) {
+    private func sendAll(_ fd: Int32, _ data: Data) -> Bool {
         var sent = 0
+        var success = true
         data.withUnsafeBytes { raw in
             guard let base = raw.baseAddress else { return }
             while sent < data.count {
                 let n = send(fd, base.advanced(by: sent), data.count - sent, 0)
-                if n <= 0 { return }
+                if n <= 0 {
+                    success = false
+                    return
+                }
                 sent += n
             }
         }
+        return success
     }
 
-    private func sendResponse(_ fd: Int32, status: String, contentType: String, body: Data, headOnly: Bool) {
+    private func sendResponse(_ fd: Int32, status: String, contentType: String, body: Data, headOnly: Bool, extraHeaders: String = "") {
         var header = "HTTP/1.1 \(status)\r\n"
         header += "Content-Type: \(contentType)\r\n"
         header += "Content-Length: \(body.count)\r\n"
+        header += extraHeaders
         header += "Connection: close\r\n\r\n"
         var response = Data(header.utf8)
         if !headOnly { response.append(body) }
-        sendAll(fd, response)
+        _ = sendAll(fd, response)
     }
 
-    private func sendFile(_ fd: Int32, url: URL, headOnly: Bool, range: (start: UInt64, end: UInt64?)?) {
+    private func sendFile(_ fd: Int32, url: URL, headOnly: Bool, range: LocalHTTPRange) {
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             sendResponse(fd, status: "404 Not Found", contentType: "text/plain", body: Data(), headOnly: false)
             return
         }
         let fileSize = handle.seekToEndOfFile()
-
-        // Resolve a satisfiable [start, end] window; otherwise full body.
-        var offset: UInt64 = 0
-        var remaining: UInt64 = fileSize
-        var status = "200 OK"
-        var rangeLine = ""
-        if let range, range.start < fileSize {
-            let end = min(range.end ?? (fileSize - 1), fileSize - 1)
-            offset = range.start
-            remaining = end - range.start + 1
-            status = "206 Partial Content"
-            rangeLine = "Content-Range: bytes \(range.start)-\(end)/\(fileSize)\r\n"
+        let resolved: (offset: UInt64, length: UInt64, headers: String, full: Bool)?
+        switch range {
+        case .absent:
+            resolved = (0, fileSize, "", true)
+        case .invalid:
+            resolved = nil
+        case .bounded(let start, let requestedEnd):
+            guard fileSize > 0, start < fileSize, requestedEnd >= start else { resolved = nil; break }
+            let end = min(requestedEnd, fileSize - 1)
+            resolved = (start, end - start + 1, "Content-Range: bytes \(start)-\(end)/\(fileSize)\r\n", false)
+        case .openEnded(let start):
+            guard fileSize > 0, start < fileSize else { resolved = nil; break }
+            resolved = (start, fileSize - start, "Content-Range: bytes \(start)-\(fileSize - 1)/\(fileSize)\r\n", false)
+        case .suffix(let suffix):
+            guard fileSize > 0 else { resolved = nil; break }
+            let length = min(suffix, fileSize)
+            let start = fileSize - length
+            resolved = (start, length, "Content-Range: bytes \(start)-\(fileSize - 1)/\(fileSize)\r\n", false)
         }
-
-        handle.seek(toFileOffset: offset)
-        var header = "HTTP/1.1 \(status)\r\n"
-        header += "Content-Type: application/octet-stream\r\n"
-        header += "Content-Length: \(remaining)\r\n"
-        header += rangeLine
-        header += "Accept-Ranges: bytes\r\n"
-        header += "Connection: close\r\n\r\n"
-        sendAll(fd, Data(header.utf8))
-        if headOnly {
+        guard let resolved else {
             try? handle.close()
+            sendResponse(fd, status: "416 Range Not Satisfiable", contentType: "text/plain", body: Data(), headOnly: true,
+                         extraHeaders: "Content-Range: bytes */\(fileSize)\r\n")
             return
         }
+
+        handle.seek(toFileOffset: resolved.offset)
+        let status = resolved.full ? "200 OK" : "206 Partial Content"
+        var header = "HTTP/1.1 \(status)\r\nContent-Type: application/octet-stream\r\nContent-Length: \(resolved.length)\r\n"
+        header += resolved.headers + "Accept-Ranges: bytes\r\nConnection: close\r\n\r\n"
+        guard sendAll(fd, Data(header.utf8)) else { try? handle.close(); return }
+        if headOnly { try? handle.close(); return }
+
+        var remaining = resolved.length
+        var delivered = true
         while remaining > 0 {
-            let want = min(UInt64(1024 * 1024), remaining)
-            let chunk = handle.readData(ofLength: Int(want))
-            if chunk.isEmpty { break }
+            let chunk = handle.readData(ofLength: Int(min(UInt64(1024 * 1024), remaining)))
+            guard !chunk.isEmpty, UInt64(chunk.count) <= remaining, sendAll(fd, chunk) else {
+                delivered = false
+                break
+            }
             remaining -= UInt64(chunk.count)
-            sendAll(fd, chunk)
         }
         try? handle.close()
-        // Only a fully served file counts as delivered (a 206 may be a retry).
-        if offset == 0 {
+        if delivered && remaining == 0 && resolved.full && !didDeliverIPA {
+            didDeliverIPA = true
             onIPADelivered?()
         }
     }
@@ -283,11 +333,14 @@ final class LocalInstallServer: @unchecked Sendable {
         }
         let safeTitle = html(title)
         let safeItms = html(itms)
+        let scriptItms = (try? JSONSerialization.data(withJSONObject: [itms], options: []))
+            .flatMap { String(data: $0, encoding: .utf8) }
+            .map { String($0.dropFirst().dropLast()) } ?? "\"\""
         return """
         <!DOCTYPE html>
         <html>
         <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Installing \(title)</title>
+        <title>Installing \(safeTitle)</title>
         <style>body{font-family:-apple-system,sans-serif;color:#1c1c1e;margin:0;min-height:100vh;
         display:flex;justify-content:center;align-items:center;background:#f7f9fd;overflow:hidden}
         .bloom{position:fixed;border-radius:50%;filter:blur(70px);pointer-events:none;z-index:0}
@@ -314,7 +367,7 @@ final class LocalInstallServer: @unchecked Sendable {
         <p>If no prompt appears, tap Install below. Keep ForgeSign open.</p>
         <a id="install" href="\(safeItms)">Install</a>
         </div>
-        <script>setTimeout(function(){ window.location.assign("\(itms)"); }, 250);</script>
+        <script>setTimeout(function(){ window.location.assign(\(scriptItms)); }, 250);</script>
         </body></html>
         """
     }

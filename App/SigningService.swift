@@ -40,9 +40,11 @@ final class SigningService: ObservableObject {
     /// so the staging area never grows beyond one archive + one dylib.
     func pruneStagedArchives(keeping kept: URL?) {
         guard let items = try? FileManager.default.contentsOfDirectory(at: workDir, includingPropertiesForKeys: nil) else { return }
+        let keptPath = kept?.standardizedFileURL.path
         let archiveExtensions: Set<String> = ["ipa", "zip"]
         for item in items {
-            guard item != kept, archiveExtensions.contains(item.pathExtension.lowercased()) else { continue }
+            guard item.standardizedFileURL.path != keptPath,
+                  archiveExtensions.contains(item.pathExtension.lowercased()) else { continue }
             try? FileManager.default.removeItem(at: item)
         }
     }
@@ -51,10 +53,11 @@ final class SigningService: ObservableObject {
     func stage(_ url: URL, as name: String? = nil) -> URL? {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let dest = workDir.appendingPathComponent(name ?? url.lastPathComponent)
+        let dest = workDir.appendingPathComponent(name ?? url.lastPathComponent).standardizedFileURL
         try? FileManager.default.removeItem(at: dest)
         do {
             try FileManager.default.copyItem(at: url, to: dest)
+            guard FileManager.default.isReadableFile(atPath: dest.path) else { return nil }
             return dest
         } catch {
             return nil
@@ -63,9 +66,9 @@ final class SigningService: ObservableObject {
 
     /// Runs the zsign signing engine. Blocking — call from a background task.
     /// Returns success, a message, the signed bundle identifier, and version.
-    nonisolated static func sign(ipa: URL, p12: URL, password: String, profile: URL,
-                     bundleId: String, output: URL, tempDir: URL,
-                     removeExtensions: Bool, enableDocuments: Bool)
+    nonisolated static func sign(ipa: URL, p12: URL, password: String, profiles: [URL],
+                      bundleId: String, output: URL, tempDir: URL,
+                      removeExtensions: Bool, enableDocuments: Bool)
         -> (ok: Bool, message: String, signedBundleId: String, signedVersion: String) {
         #if !FORGE_BRIDGE
         // UI-preview builds (e.g. the simulator target) omit the zsign engine.
@@ -74,8 +77,9 @@ final class SigningService: ObservableObject {
         var msgBuf = [CChar](repeating: 0, count: 1024)
         var bidBuf = [CChar](repeating: 0, count: 512)
         var verBuf = [CChar](repeating: 0, count: 128)
-        let status = forgesign_sign_ipa(
-            ipa.path, p12.path, password, profile.path,
+        let profilePaths = profiles.map(\.path).joined(separator: "\n")
+        let status = forgesign_sign_ipa_profiles(
+            ipa.path, p12.path, password, profilePaths,
             bundleId.isEmpty ? nil : bundleId,
             output.path,
             tempDir.path,
@@ -90,6 +94,23 @@ final class SigningService: ObservableObject {
         let signedVersion = String(decoding: verBuf.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
         return (status == 0, message.isEmpty ? (status == 0 ? "Signed." : "Failed.") : message,
                 signedId, signedVersion.isEmpty ? "1.0" : signedVersion)
+        #endif
+    }
+
+    nonisolated static func verify(ipa: URL, temporaryDirectory: URL) -> (ok: Bool, message: String) {
+        #if !FORGE_BRIDGE
+        return (false, "Signed IPA verification is unavailable in this build.")
+        #else
+        var messageBuffer = [CChar](repeating: 0, count: 1024)
+        let status = forgesign_verify_ipa(
+            ipa.path,
+            temporaryDirectory.path,
+            &messageBuffer,
+            Int32(messageBuffer.count)
+        )
+        let message = String(decoding: messageBuffer.prefix(while: { $0 != 0 })
+            .map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return (status == 0, message.isEmpty ? (status == 0 ? "Signed IPA verified." : "Signed IPA verification failed.") : message)
         #endif
     }
 

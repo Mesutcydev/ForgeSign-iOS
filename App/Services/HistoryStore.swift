@@ -2,7 +2,7 @@ import Foundation
 
 struct SigningRecord: Codable, Identifiable, Equatable {
     enum InstallState: String, Codable {
-        case signed, installing, installed, failed
+        case signed, installing, delivered, installed, failed
     }
 
     let id: UUID
@@ -48,6 +48,20 @@ final class HistoryStore: ObservableObject {
         signedDir.appendingPathComponent(record.outputName)
     }
 
+    func uniqueOutputURL(for inputName: String) -> URL {
+        let stem = URL(fileURLWithPath: inputName).deletingPathExtension().lastPathComponent
+        let base = stem + "-signed"
+        var index = 1
+        while true {
+            let suffix = index == 1 ? "" : "-\(index)"
+            let candidate = signedDir.appendingPathComponent(base + suffix + ".ipa")
+            if !FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            index += 1
+        }
+    }
+
     func fileExists(for record: SigningRecord) -> Bool {
         FileManager.default.fileExists(atPath: outputURL(for: record).path)
     }
@@ -83,7 +97,7 @@ final class HistoryStore: ObservableObject {
 
     private func save() {
         if let data = try? JSONEncoder().encode(records) {
-            try? data.write(to: indexURL, options: .completeFileProtection)
+            try? ProtectedPersistence.write(data, to: indexURL)
         }
     }
 }

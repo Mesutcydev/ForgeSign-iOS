@@ -160,8 +160,13 @@ final class RepositoryStore: ObservableObject {
     @Published var activeDownloadID: UUID?
     @Published var downloadError: String?
 
+    /// Last successful catalog fetch per repository (drives the "updated" label).
+    @Published private(set) var catalogFetchedAt: [UUID: Date] = [:]
+
     /// Set when a download finishes — the Sign tab observes this and loads it.
     @Published var pendingIPA: URL?
+
+    private var activeDownloadTask: Task<Void, Never>?
 
     private let indexURL: URL
     private let downloadsDir: URL
@@ -195,9 +200,7 @@ final class RepositoryStore: ObservableObject {
     func add(urlString: String) -> Result<Repository, AddError> {
         let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              url.host != nil else {
+              NetworkPolicy.validateHTTPS(url) else {
             return .failure(.invalidURL)
         }
         guard !repositories.contains(where: { $0.url == url }) else {
@@ -213,6 +216,7 @@ final class RepositoryStore: ObservableObject {
         repositories.removeAll { $0.id == repo.id }
         catalog[repo.id] = nil
         fetchError[repo.id] = nil
+        catalogFetchedAt[repo.id] = nil
         save()
     }
 
@@ -222,6 +226,10 @@ final class RepositoryStore: ObservableObject {
         loadingRepoID = repo.id
         fetchError[repo.id] = nil
         defer { if loadingRepoID == repo.id { loadingRepoID = nil } }
+        guard NetworkPolicy.validateHTTPS(repo.url) else {
+            fetchError[repo.id] = "Repository URLs must use HTTPS."
+            return
+        }
         do {
             var req = URLRequest(url: repo.url)
             req.cachePolicy = .reloadIgnoringLocalCacheData
@@ -240,6 +248,7 @@ final class RepositoryStore: ObservableObject {
             }
             let source = try JSONDecoder().decode(RepoSource.self, from: data)
             catalog[repo.id] = source
+            catalogFetchedAt[repo.id] = .now
             // Adopt the source's own display name once we know it.
             if let name = source.name, !name.isEmpty,
                let i = repositories.firstIndex(where: { $0.id == repo.id }),
@@ -253,23 +262,35 @@ final class RepositoryStore: ObservableObject {
     }
 
     func download(_ app: RepoApp) async {
-        guard let url = app.downloadURL else {
-            downloadError = "This app has no download URL."
+        guard let url = app.downloadURL, NetworkPolicy.validateHTTPS(url) else {
+            downloadError = "This app has no safe HTTPS download URL."
             return
         }
         activeDownloadID = app.id
         downloadError = nil
         defer { if activeDownloadID == app.id { activeDownloadID = nil } }
         do {
-            // Streams to a temp file — safe for large IPAs (no full in-memory load).
             let (tempURL, resp) = try await URLSession.shared.download(from: url)
             guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
                 downloadError = "Download failed — the server returned an error."
                 return
             }
+            let values = try tempURL.resourceValues(forKeys: [.fileSizeKey])
+            let size = Int64(values.fileSize ?? 0)
+            let maximum: Int64 = 2 * 1024 * 1024 * 1024
+            guard size > 0, size <= maximum, app.size == nil || app.size == size else {
+                downloadError = "Download size did not match the catalog or exceeded the safe limit."
+                return
+            }
             let dest = downloadsDir.appendingPathComponent(Self.ipaName(for: app))
-            try? FileManager.default.removeItem(at: dest)
-            try FileManager.default.moveItem(at: tempURL, to: dest)
+            let replacement = dest.deletingLastPathComponent()
+                .appendingPathComponent(".\(dest.lastPathComponent).\(UUID().uuidString).partial")
+            try FileManager.default.moveItem(at: tempURL, to: replacement)
+            if FileManager.default.fileExists(atPath: dest.path) {
+                _ = try FileManager.default.replaceItemAt(dest, withItemAt: replacement)
+            } else {
+                try FileManager.default.moveItem(at: replacement, to: dest)
+            }
             pendingIPA = dest
         } catch {
             downloadError = error.localizedDescription
@@ -295,7 +316,7 @@ final class RepositoryStore: ObservableObject {
     private func save() {
         let index = Index(repositories: repositories)
         if let data = try? JSONEncoder().encode(index) {
-            try? data.write(to: indexURL, options: .completeFileProtection)
+            try? ProtectedPersistence.write(data, to: indexURL)
         }
     }
 }

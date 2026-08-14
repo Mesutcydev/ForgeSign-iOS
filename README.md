@@ -1,6 +1,6 @@
 # ForgeSign for iOS
 
-On-device IPA re-signer for iPhone and iPad. Sign, install and manage IPAs entirely on the device — no computer, no server, no uploads.
+On-device IPA re-signer for iPhone and iPad. Sign and prepare IPAs on-device; installation uses a loopback server and a trusted remote HTTPS manifest, with no certificate or app-content upload.
 
 **[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download the latest unsigned IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)**
 
@@ -19,9 +19,9 @@ ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ e
 - **Sign IPAs on-device** — pick an `.ipa`, a `.p12` certificate and a `.mobileprovision` profile, optionally rewrite the bundle ID, strip app extensions or enable Files sharing, and sign in seconds with the vendored zsign engine.
 - **Remembered certificates** — imported `.p12` files are validated once and stored on-device (Application Support). The last-used certificate is re-selected automatically.
 - **Certificate insights** — common name, organization and team ID are parsed from the certificate, and a live countdown pill shows remaining validity (`200d left`, amber under 30 days, red when expired).
-- **Keychain passwords** — opt-in password storage in the iOS Keychain (with an encrypted-file fallback when the Keychain is unavailable), so re-signing takes two taps.
-- **Install on device** — semi-local OTA install: the IPA is served over loopback HTTP while a trusted remote HTTPS plist (`api.palera.in`) drives `itms-services` directly (Safari is a fallback only). Silent-audio keep-alive keeps large downloads alive in the background.
-- **Library** — a persistent history of every signed app with status (signed / installing / installed / missing), plus reinstall, share and delete actions.
+- **Keychain passwords** — opt-in password storage only in the device-bound iOS Keychain; if Keychain storage is unavailable, ForgeSign asks for the password again.
+- **Install on device** — semi-local OTA install: the IPA is served over loopback HTTP while a trusted remote HTTPS plist (`api.palera.in`) drives `itms-services` directly (Safari is a fallback only). The external manifest service receives install metadata and the local package URL.
+- **Library** — a persistent history of every signed app with status (signed / installing / delivered / installed / missing), plus reinstall, share and delete actions.
 - **IPA preflight** — package, bundle, encryption and architecture signals are shown before a signing run.
 - **Sources** — save repository feeds and hand selected IPA downloads into the normal signing flow.
 - **Optional dylib injection** — inject a compatible decrypted dylib into the app, with an opt-in app-extension path, before signing. The original IPA is left untouched.
@@ -44,7 +44,7 @@ Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the
 
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-1.3.ipa` from the [latest release](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
+Grab `ForgeSign-1.4.ipa` from the [latest release](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
@@ -52,7 +52,15 @@ Grab `ForgeSign-1.3.ipa` from the [latest release](https://github.com/Mesutcydev
 
 Only sign and install applications you have the rights to modify. Intended for your own builds and development use.
 
-## What’s new in 1.3
+## What’s new in 1.4
+
+- Fail-closed IPA extraction with archive limits, structural validation, and mandatory post-sign verification.
+- Certificate/profile/team/bundle-ID compatibility gates and CMS-verified provisioning profiles.
+- Reliable install delivery accounting, exact HTTP ranges, cancellation, Library state parity, and honest `delivered` status.
+- Files/Open In routing, HTTPS repository policy, atomic protected persistence, and Keychain-only password storage.
+- 1.3 wildcard iCloud entitlement and Files-picker fix retained.
+
+## What was new in 1.3
 
 - Wildcard and placeholder iCloud entitlements are removed before signing so Files document pickers continue working in installed apps.
 - Valid iCloud container entitlements are preserved, while the existing document-browser workaround remains in place.

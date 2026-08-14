@@ -11,6 +11,47 @@
 #include "third-party/minizip/unzip.h"
 #endif
 
+namespace {
+const uint64_t kMaxZipEntries = 4096;
+const uint64_t kMaxZipFilenameBytes = 1024;
+const uint64_t kMaxZipEntryBytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
+const uint64_t kMaxZipExpandedBytes = 8ULL * 1024ULL * 1024ULL * 1024ULL;
+const uint64_t kMaxZipCompressionRatio = 200;
+const size_t kMaxZipPathDepth = 32;
+
+static bool IsSafeZipPath(const string& path)
+{
+    if (path.empty()) return false;
+
+    string normalized = path;
+    ZUtil::StringReplace(normalized, "\\", "/");
+    if (normalized[0] == '/' || normalized[0] == '\\' || normalized.find(':') != string::npos) {
+        return false;
+    }
+
+    size_t depth = 0;
+    size_t start = 0;
+    while (start < normalized.size()) {
+        size_t end = normalized.find('/', start);
+        if (end == string::npos) end = normalized.size();
+        if (end > start) {
+            ++depth;
+            string component = normalized.substr(start, end - start);
+            if (component == "..") return false;
+        }
+        start = end + 1;
+    }
+    return depth <= kMaxZipPathDepth;
+}
+
+static bool IsSymlinkOrSpecial(const unz_file_info64& info)
+{
+    const uint32_t mode = (uint32_t)(info.external_fa >> 16);
+    const uint32_t type = mode & 0170000;
+    return type != 0 && type != 0100000 && type != 0040000;
+}
+}
+
 void Zip::GetModificationTime(const char* path, void* zfi)
 {
 	zip_fileinfo* zi = (zip_fileinfo*)zfi;
@@ -236,43 +277,70 @@ bool Zip::_ReadFileFromZip(void* hZip, const string& strPath, const string& strR
 	return bRet;
 }
 
-static bool _IsPathSafe(const string& strPath)
+static bool ValidateZipArchive(const char* zip_file)
 {
-	if (strPath.empty()) {
-		return false;
-	}
+    unzFile uf = unzOpen64(zip_file);
+    if (NULL == uf) return false;
 
-	string strNormalized = strPath;
-	ZUtil::StringReplace(strNormalized, "\\", "/");
-	if (strNormalized[0] == '/' || strNormalized[0] == '\\') {
-		return false;
-	}
-	if (string::npos != strNormalized.find(':')) {
-		return false;
-	}
+    unz_global_info64 gi = { 0 };
+    if (UNZ_OK != unzGetGlobalInfo64(uf, &gi) || gi.number_entry > kMaxZipEntries) {
+        unzClose(uf);
+        return false;
+    }
 
-	size_t start = 0;
-	size_t len = strNormalized.size();
-	while (start < len) {
-		size_t end = strNormalized.find('/', start);
-		if (end == string::npos) {
-			end = len;
-		}
-		size_t compLen = end - start;
-		if (compLen == 2 && strNormalized[start] == '.' && strNormalized[start + 1] == '.') {
-			return false;
-		}
-		start = end + 1;
-	}
-	return true;
+    set<string> paths;
+    uint64_t expandedBytes = 0;
+    char pathBuffer[kMaxZipFilenameBytes + 1] = { 0 };
+    for (uint64_t i = 0; i < gi.number_entry; ++i) {
+        unz_file_info64 info = { 0 };
+        memset(pathBuffer, 0, sizeof(pathBuffer));
+        if (UNZ_OK != unzGetCurrentFileInfo64(uf, &info, pathBuffer,
+                                               (uLong)sizeof(pathBuffer), NULL, 0, NULL, 0)) {
+            unzClose(uf);
+            return false;
+        }
+        if (info.size_filename == 0 || info.size_filename > kMaxZipFilenameBytes ||
+            !IsSafeZipPath(pathBuffer) || IsSymlinkOrSpecial(info)) {
+            unzClose(uf);
+            return false;
+        }
+
+        string path = pathBuffer;
+        ZUtil::StringReplace(path, "\\", "/");
+        while (!path.empty() && path.back() == '/') path.pop_back();
+        if (path.empty() || !paths.insert(path).second) {
+            unzClose(uf);
+            return false;
+        }
+        if (info.uncompressed_size > kMaxZipEntryBytes ||
+            info.uncompressed_size > kMaxZipExpandedBytes - expandedBytes) {
+            unzClose(uf);
+            return false;
+        }
+        expandedBytes += info.uncompressed_size;
+        if (info.uncompressed_size > 0) {
+            if (info.compressed_size == 0 ||
+                info.uncompressed_size / info.compressed_size > kMaxZipCompressionRatio) {
+                unzClose(uf);
+                return false;
+            }
+        }
+
+        if (i + 1 < gi.number_entry && UNZ_OK != unzGoToNextFile(uf)) {
+            unzClose(uf);
+            return false;
+        }
+    }
+    unzClose(uf);
+    return true;
 }
 
 bool Zip::_Extract(const char* zip_file, const char* output_folder)
 {
 	return _EnumZipItems(zip_file, [&](unzFile uFile, bool bFolder, const string& strPath) {
-		if (!_IsPathSafe(strPath)) {
-			ZLog::ErrorV(">>> Zip: Skipping unsafe path: %s\n", strPath.c_str());
-			return true;
+		if (!IsSafeZipPath(strPath)) {
+			ZLog::ErrorV(">>> Zip: Rejecting unsafe path: %s\n", strPath.c_str());
+			return false;
 		}
 		if (bFolder) {
 			if (!ZFile::CreateFolderV("%s/%s", output_folder, strPath.c_str())) {
@@ -290,7 +358,7 @@ bool Zip::_Extract(const char* zip_file, const char* output_folder)
 bool Zip::Extract(const char* zip_file, const char* output_folder)
 {
 	ZFile::RemoveFolder(output_folder);
-	if (!_Extract(zip_file, output_folder)) {
+	if (!ValidateZipArchive(zip_file) || !_Extract(zip_file, output_folder)) {
 		ZFile::RemoveFolder(output_folder);
 		return false;
 	}

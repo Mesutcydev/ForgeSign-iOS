@@ -215,6 +215,8 @@ struct GlassFileRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(GlassTactileButtonStyle())
+        .accessibilityLabel("\(label), \(file?.lastPathComponent ?? "not selected")")
+        .accessibilityHint("Double-tap to choose a file.")
     }
 }
 
@@ -272,6 +274,10 @@ struct GlassToggleRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
+        .accessibilityValue(isOn ? "On" : "Off")
+        .accessibilityHint("Double-tap to toggle.")
     }
 }
 
@@ -295,9 +301,11 @@ struct GlassToggle: View {
                     .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
                     .padding(.horizontal, 2)
             }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityValue(isOn ? "on" : "off")
+        .accessibilityHidden(true)
     }
 }
 

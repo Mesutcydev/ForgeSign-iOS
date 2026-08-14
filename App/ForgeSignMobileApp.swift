@@ -7,6 +7,7 @@ struct ForgeSignMobileApp: App {
     @StateObject private var history = HistoryStore()
     @StateObject private var installer = InstallController()
     @StateObject private var repositories = RepositoryStore()
+    @StateObject private var imports = ImportRouter()
 
     var body: some Scene {
         WindowGroup {
@@ -16,6 +17,8 @@ struct ForgeSignMobileApp: App {
                 .environmentObject(history)
                 .environmentObject(installer)
                 .environmentObject(repositories)
+                .environmentObject(imports)
+                .onOpenURL { imports.receive($0) }
         }
     }
 }
@@ -43,9 +46,11 @@ private struct ForgeRootView: View {
                 .tag(1)
 
             LibraryView { record in
+                history.setInstallState(.installing, for: record.id)
                 installer.install(ipa: history.outputURL(for: record),
                                   bundleId: record.bundleId,
-                                  version: record.version)
+                                  version: record.version,
+                                  recordID: record.id)
             }
             .tabItem { Label("Library", systemImage: "clock.arrow.circlepath") }
             .tag(2)
@@ -53,6 +58,13 @@ private struct ForgeRootView: View {
         .tint(theme.accent)
         .forgeTheme(theme)
         .forgeScaledType()
+        .onReceive(NotificationCenter.default.publisher(for: .forgeInstallState)) { notification in
+            guard let payload = notification.userInfo,
+                  let id = payload["recordID"] as? UUID,
+                  let rawState = payload["state"] as? String,
+                  let state = SigningRecord.InstallState(rawValue: rawState) else { return }
+            history.setInstallState(state, for: id)
+        }
         .onChange(of: repositories.pendingIPA) { ipa in
             // A repo download finished — surface it in the Sign tab.
             if ipa != nil { tab = 0 }

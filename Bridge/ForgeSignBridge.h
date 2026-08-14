@@ -21,6 +21,22 @@ int forgesign_sign_ipa(const char* ipaPath,
                        char* versionBuf,
                        int versionBufLen);
 
+int forgesign_sign_ipa_profiles(const char* ipaPath,
+                                const char* p12Path,
+                                const char* password,
+                                const char* profilePaths,
+                                const char* bundleId,
+                                const char* outputPath,
+                                const char* tempFolder,
+                                int removeExtensions,
+                                int enableDocuments,
+                                char* msgBuf,
+                                int msgBufLen,
+                                char* bundleIdBuf,
+                                int bundleIdBufLen,
+                                char* versionBuf,
+                                int versionBufLen);
+
 int forgesign_p12_info(const char* p12Path,
                        const char* password,
                        char* cnBuf,
@@ -33,12 +49,21 @@ int forgesign_p12_info(const char* p12Path,
                        char* msgBuf,
                        int msgBufLen);
 
+int forgesign_profile_info(const char* profilePath,
+                           char* msgBuf,
+                           int msgBufLen);
+
 int forgesign_inspect_ipa(const char* ipaPath,
                           const char* tempFolder,
                           char* jsonBuf,
                           int jsonBufLen,
                           char* msgBuf,
                           int msgBufLen);
+
+int forgesign_verify_ipa(const char* ipaPath,
+                         const char* tempFolder,
+                         char* msgBuf,
+                         int msgBufLen);
 
 // Prepares a disposable IPA by copying a dylib into the app bundle and
 // adding its load command to the app executable and, optionally, top-level

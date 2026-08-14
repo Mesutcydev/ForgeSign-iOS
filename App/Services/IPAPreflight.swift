@@ -60,6 +60,10 @@ enum IPAPreflightError: LocalizedError, Sendable {
 
 enum IPAPreflightService {
     static func inspect(ipa: URL, temporaryDirectory: URL) -> Result<IPAPreflight, IPAPreflightError> {
+        guard FileManager.default.fileExists(atPath: ipa.path),
+              FileManager.default.isReadableFile(atPath: ipa.path) else {
+            return .failure(.failed("The IPA is no longer available. Please choose it again."))
+        }
         #if !FORGE_BRIDGE
         return .failure(.unavailable)
         #else

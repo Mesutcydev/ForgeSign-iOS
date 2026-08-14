@@ -10,9 +10,55 @@ struct ProfileRecord: Codable, Identifiable, Equatable {
     let provisionedDeviceCount: Int?
     let provisionsAllDevices: Bool?
     let getTaskAllow: Bool?
+    let profileIsAuthentic: Bool
     let addedAt: Date
 
+    private enum CodingKeys: String, CodingKey {
+        case id, filename, name, teamID, applicationIdentifier, notAfter
+        case provisionedDeviceCount, provisionsAllDevices, getTaskAllow
+        case profileIsAuthentic, addedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(UUID.self, forKey: .id)
+        filename = try values.decode(String.self, forKey: .filename)
+        name = try values.decodeIfPresent(String.self, forKey: .name)
+        teamID = try values.decodeIfPresent(String.self, forKey: .teamID)
+        applicationIdentifier = try values.decodeIfPresent(String.self, forKey: .applicationIdentifier)
+        notAfter = try values.decodeIfPresent(Date.self, forKey: .notAfter)
+        provisionedDeviceCount = try values.decodeIfPresent(Int.self, forKey: .provisionedDeviceCount)
+        provisionsAllDevices = try values.decodeIfPresent(Bool.self, forKey: .provisionsAllDevices)
+        getTaskAllow = try values.decodeIfPresent(Bool.self, forKey: .getTaskAllow)
+        profileIsAuthentic = try values.decodeIfPresent(Bool.self, forKey: .profileIsAuthentic) ?? false
+        addedAt = try values.decode(Date.self, forKey: .addedAt)
+    }
+
+    init(id: UUID, filename: String, name: String?, teamID: String?, applicationIdentifier: String?,
+         notAfter: Date?, provisionedDeviceCount: Int?, provisionsAllDevices: Bool?, getTaskAllow: Bool?,
+         profileIsAuthentic: Bool = false, addedAt: Date) {
+        self.id = id
+        self.filename = filename
+        self.name = name
+        self.teamID = teamID
+        self.applicationIdentifier = applicationIdentifier
+        self.notAfter = notAfter
+        self.provisionedDeviceCount = provisionedDeviceCount
+        self.provisionsAllDevices = provisionsAllDevices
+        self.getTaskAllow = getTaskAllow
+        self.profileIsAuthentic = profileIsAuthentic
+        self.addedAt = addedAt
+    }
+
     var displayName: String { name ?? filename }
+
+    func withAuthenticity(_ value: Bool) -> ProfileRecord {
+        ProfileRecord(id: id, filename: filename, name: name, teamID: teamID,
+                      applicationIdentifier: applicationIdentifier, notAfter: notAfter,
+                      provisionedDeviceCount: provisionedDeviceCount,
+                      provisionsAllDevices: provisionsAllDevices, getTaskAllow: getTaskAllow,
+                      profileIsAuthentic: value, addedAt: addedAt)
+    }
 }
 
 /// Remembers imported provisioning profiles (.mobileprovision) on-device
@@ -71,6 +117,9 @@ final class ProfileStore: ObservableObject {
         guard let info = ProvisioningProfileInspector.inspect(data: data) else {
             return .failure(.notAProfile)
         }
+        guard ProfileAuthenticityChecker.isAuthentic(source) else {
+            return .failure(.notAProfile)
+        }
 
         var filename = source.lastPathComponent
         if profiles.contains(where: { $0.filename == filename }) {
@@ -96,6 +145,7 @@ final class ProfileStore: ObservableObject {
             provisionedDeviceCount: info.provisionedDeviceCount,
             provisionsAllDevices: info.provisionsAllDevices,
             getTaskAllow: info.getTaskAllow,
+            profileIsAuthentic: true,
             addedAt: .now
         )
 
@@ -117,7 +167,11 @@ final class ProfileStore: ObservableObject {
     private func load() {
         guard let data = try? Data(contentsOf: indexURL),
               let index = try? JSONDecoder().decode(Index.self, from: data) else { return }
-        profiles = index.profiles.filter { FileManager.default.fileExists(atPath: fileURL(for: $0).path) }
+        profiles = index.profiles.compactMap { profile in
+            guard FileManager.default.fileExists(atPath: fileURL(for: profile).path) else { return nil }
+            let verified = ProfileAuthenticityChecker.isAuthentic(fileURL(for: profile))
+            return profile.profileIsAuthentic == verified ? profile : profile.withAuthenticity(verified)
+        }
         selectedID = index.selectedID
         if selectedID == nil { selectedID = profiles.first?.id }
     }
@@ -125,7 +179,7 @@ final class ProfileStore: ObservableObject {
     private func save() {
         let index = Index(profiles: profiles, selectedID: selectedID)
         if let data = try? JSONEncoder().encode(index) {
-            try? data.write(to: indexURL, options: .completeFileProtection)
+            try? ProtectedPersistence.write(data, to: indexURL)
         }
     }
 }

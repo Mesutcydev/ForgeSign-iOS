@@ -5,6 +5,37 @@
 #include "sys/stat.h"
 #include "sys/types.h"
 
+static string ProfileBundlePattern(const string& applicationId)
+{
+	size_t dot = applicationId.find('.');
+	return dot == string::npos ? applicationId : applicationId.substr(dot + 1);
+}
+
+static bool ProfilePatternMatches(const string& pattern, const string& bundleId)
+{
+	if (pattern == "*" || pattern == bundleId) return true;
+	if (pattern.size() >= 2 && pattern.compare(pattern.size() - 2, 2, ".*") == 0) {
+		string prefix = pattern.substr(0, pattern.size() - 2);
+		return bundleId == prefix ||
+			(bundleId.size() > prefix.size() && bundleId.compare(0, prefix.size(), prefix) == 0 && bundleId[prefix.size()] == '.');
+	}
+
+	size_t patternStart = 0;
+	size_t bundleStart = 0;
+	while (patternStart < pattern.size() || bundleStart < bundleId.size()) {
+		size_t patternEnd = pattern.find('.', patternStart);
+		if (patternEnd == string::npos) patternEnd = pattern.size();
+		size_t bundleEnd = bundleId.find('.', bundleStart);
+		if (bundleEnd == string::npos) bundleEnd = bundleId.size();
+		string patternPart = pattern.substr(patternStart, patternEnd - patternStart);
+		string bundlePart = bundleId.substr(bundleStart, bundleEnd - bundleStart);
+		if (patternPart != "*" && patternPart != bundlePart) return false;
+		patternStart = patternEnd == pattern.size() ? pattern.size() : patternEnd + 1;
+		bundleStart = bundleEnd == bundleId.size() ? bundleId.size() : bundleEnd + 1;
+	}
+	return patternStart == pattern.size() && bundleStart == bundleId.size();
+}
+
 ZBundle::ZBundle()
 {
 	m_pSignAssets = NULL;
@@ -406,19 +437,29 @@ bool ZBundle::SignNode(jvalue& jvNode)
 	// written after sealing leaves the bundle failing Apple's verifier with
 	// "a sealed resource is missing or invalid" (codesign --verify --strict).
 	if (m_pSignAssets) {
-		auto endsWith = [](const string& str, const string& suffix) {
-			return str.size() >= suffix.size() && 0 == str.compare(str.size()-suffix.size(), suffix.size(), suffix);
-		};
-		for (auto it = m_pSignAssets->rbegin(); it != m_pSignAssets->rend(); ++it) {
-			m_pSignAsset = &(*it);
-			if (endsWith(m_pSignAsset->m_strApplicationId, strBundleId)) {
-				if (!ZFile::WriteFileV(m_pSignAsset->m_strProvData, "%s/%s/embedded.mobileprovision", m_strAppFolder.c_str(), strFolder.c_str())) {
-					ZLog::ErrorV(">>> Can't write embedded.mobileprovision!\n");
-					return false;
-				}
-				bForceSign = true;
-				break;
+		ZSignAsset* bestAsset = NULL;
+		bool bestExplicit = false;
+		for (auto it = m_pSignAssets->begin(); it != m_pSignAssets->end(); ++it) {
+			string pattern = ProfileBundlePattern(it->m_strApplicationId);
+			if (!ProfilePatternMatches(pattern, strBundleId)) continue;
+			bool explicitMatch = pattern == strBundleId;
+			if (!bestAsset || (explicitMatch && !bestExplicit)) {
+				bestAsset = &(*it);
+				bestExplicit = explicitMatch;
 			}
+		}
+		if (bestAsset) {
+			m_pSignAsset = bestAsset;
+			if (!ZFile::WriteFileV(m_pSignAsset->m_strProvData, "%s/%s/embedded.mobileprovision", m_strAppFolder.c_str(), strFolder.c_str())) {
+				ZLog::ErrorV(">>> Can't write embedded.mobileprovision!\n");
+				return false;
+			}
+			bForceSign = true;
+		} else if ("/" != strFolder &&
+				(strFolder.find("PlugIns/") == 0 || strFolder.find("Extensions/") == 0 ||
+				strFolder.find("Watch/") == 0 || strFolder.find("AppClips/") == 0)) {
+			ZLog::ErrorV(">>> No provisioning profile matches bundle ID: %s\n", strBundleId.c_str());
+			return false;
 		}
 	}
 

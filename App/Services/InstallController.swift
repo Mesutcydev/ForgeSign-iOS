@@ -1,32 +1,34 @@
 import UIKit
 
-/// Owns the semi-local OTA install flow (local HTTP IPA + remote HTTPS
-/// plist via `api.palera.in`). Opens `itms-services` directly for a seamless
-/// install prompt (1.0 behaviour); Safari is the fallback only.
+/// Owns the semi-local OTA install flow and one active operation at a time.
 @MainActor
 final class InstallController: ObservableObject {
     @Published var installServer: LocalInstallServer?
     @Published var installStatus = ""
 
-    /// Called when the currently served IPA has been fully downloaded.
     var onDelivered: (() -> Void)?
 
+    private struct Operation {
+        let id: UUID
+        let recordID: UUID?
+        var server: LocalInstallServer?
+        var task: Task<Void, Never>?
+        var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+        var delivered = false
+    }
+
+    private var operation: Operation?
     private var foregroundObserver: (any NSObjectProtocol)?
 
-    /// Tracks whether the current install delivered its IPA yet.
-    private var delivered = false
-
-    /// Coming back to the foreground while a server is still up but nothing was
-    /// downloaded means the installer is not pulling anymore — release the
-    /// silent-audio keep-alive so we don't hold the audio background mode.
-    private func observeForeground() {
-        guard foregroundObserver == nil else { return }
+    private func observeForeground(for id: UUID) {
+        endObservation()
         foregroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
-            object: nil, queue: .main
+            object: nil,
+            queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.installServer != nil, !self.delivered else { return }
+                guard let self, self.operation?.id == id, self.operation?.delivered == false else { return }
                 InstallKeepAlive.shared.stop()
                 if self.installStatus.hasPrefix("Install prompted") {
                     self.installStatus = "Back in ForgeSign. If no dialog appeared, try “Retry via Safari”."
@@ -36,81 +38,87 @@ final class InstallController: ObservableObject {
     }
 
     private func endObservation() {
-        if let observer = foregroundObserver {
-            NotificationCenter.default.removeObserver(observer)
-            foregroundObserver = nil
+        if let foregroundObserver {
+            NotificationCenter.default.removeObserver(foregroundObserver)
+            self.foregroundObserver = nil
         }
     }
 
-    func install(ipa: URL, bundleId: String, version: String) {
+    func install(ipa: URL, bundleId: String, version: String, recordID: UUID? = nil) {
+        cancelInstall(markFailed: false)
+        let id = UUID()
+        var newOperation = Operation(id: id, recordID: recordID)
         installStatus = "Starting install server…"
-        delivered = false
-        observeForeground()
-
-        // Keep the app (and its local server) alive while the iOS installer
-        // downloads. A background task alone only buys ~30 seconds; silent
-        // audio playback holds the `audio` background mode for large IPAs.
-        var bgTask: UIBackgroundTaskIdentifier = .invalid
-        bgTask = UIApplication.shared.beginBackgroundTask(withName: "forgesign.install") {
-            UIApplication.shared.endBackgroundTask(bgTask)
-            bgTask = .invalid
+        observeForeground(for: id)
+        newOperation.backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "forgesign.install") { [weak self] in
+            Task { @MainActor in self?.cancelInstall(markFailed: true) }
+        }
+        operation = newOperation
+        if let recordID {
+            NotificationCenter.default.post(name: .forgeInstallState, object: nil,
+                                            userInfo: ["recordID": recordID, "state": SigningRecord.InstallState.installing.rawValue])
         }
         InstallKeepAlive.shared.start()
 
-        Task {
+        let task = Task { [weak self] in
+            guard let self else { return }
             do {
-                installServer?.stop()
                 let server = LocalInstallServer()
-                _ = try await server.start(ipa: ipa, bundleId: bundleId,
-                                           bundleVersion: version,
+                _ = try await server.start(ipa: ipa, bundleId: bundleId, bundleVersion: version,
                                            title: ipa.deletingPathExtension().lastPathComponent)
-                installServer = server
+                try Task.checkCancellation()
+                guard self.operation?.id == id else {
+                    server.stop()
+                    return
+                }
+                self.operation?.server = server
+                self.installServer = server
                 server.onIPADelivered = { [weak self] in
                     Task { @MainActor in
-                        guard let self else { return }
-                        self.delivered = true
-                        self.endObservation()
+                        guard let self, self.operation?.id == id, self.operation?.delivered == false else { return }
+                        self.operation?.delivered = true
                         self.installStatus = "IPA delivered. Installing… accept the iOS prompt if shown."
+                        if let recordID = self.operation?.recordID {
+                            NotificationCenter.default.post(name: .forgeInstallState, object: nil,
+                                                            userInfo: ["recordID": recordID, "state": SigningRecord.InstallState.delivered.rawValue])
+                        }
                         InstallKeepAlive.shared.stop()
                         self.onDelivered?()
                     }
                 }
 
-                // Confirm the local IPA endpoint answers before handing off.
                 let health = URL(string: "\(server.installBaseURL)/health")!
                 let (_, healthResp) = try await URLSession.shared.data(from: health)
-                guard (healthResp as? HTTPURLResponse)?.statusCode == 200 else {
+                guard self.operation?.id == id,
+                      (healthResp as? HTTPURLResponse)?.statusCode == 200 else {
                     throw NSError(domain: "forgesign.install", code: 1,
                                   userInfo: [NSLocalizedDescriptionKey: "Local install server failed self-check."])
                 }
 
-                // Confirm the remote HTTPS plist resolves (this is what iOS
-                // actually fetches — must be trusted public HTTPS).
                 guard let plistURL = URL(string: server.remoteManifestURL) else {
                     throw NSError(domain: "forgesign.install", code: 2,
                                   userInfo: [NSLocalizedDescriptionKey: "Bad remote manifest URL."])
                 }
                 let (plistData, plistResp) = try await URLSession.shared.data(from: plistURL)
-                guard (plistResp as? HTTPURLResponse)?.statusCode == 200,
-                      let plistText = String(data: plistData, encoding: .utf8),
-                      plistText.contains("software-package") else {
+                guard self.operation?.id == id,
+                      (plistResp as? HTTPURLResponse)?.statusCode == 200,
+                      NetworkPolicy.manifestIsValid(plistData,
+                                                    packageURL: server.payloadURL,
+                                                    bundleID: bundleId,
+                                                    version: version) else {
                     throw NSError(domain: "forgesign.install", code: 3,
                                   userInfo: [NSLocalizedDescriptionKey: "Remote manifest server unavailable. Check network and retry."])
                 }
 
-                // 1.0-style seamless handoff: open itms-services directly so iOS
-                // shows the install prompt in-place. The manifest is remote
-                // HTTPS (api.palera.in) — trusted — while the IPA stays on
-                // local HTTP. Safari is only a fallback if the direct open is
-                // gated.
                 guard let itmsURL = URL(string: server.itmsServicesURL) else {
                     throw NSError(domain: "forgesign.install", code: 4,
                                   userInfo: [NSLocalizedDescriptionKey: "Bad itms-services URL."])
                 }
-                installStatus = "Triggering installer…"
+                guard self.operation?.id == id else { return }
+                self.installStatus = "Triggering installer…"
                 UIApplication.shared.open(itmsURL) { [weak self] opened in
                     Task { @MainActor in
-                        guard let self else { return }
+                        guard let self, self.operation?.id == id else { return }
                         if opened {
                             self.installStatus = "Install prompted. Accept the iOS dialog and keep ForgeSign open."
                         } else {
@@ -121,28 +129,51 @@ final class InstallController: ObservableObject {
                         }
                     }
                 }
-
-                try? await Task.sleep(nanoseconds: 30 * 60 * 1_000_000_000)
+                try await Task.sleep(nanoseconds: 30 * 60 * 1_000_000_000)
+                self.finish(id: id, status: nil)
+            } catch is CancellationError {
+                self.finish(id: id, status: "Install cancelled.")
             } catch {
-                delivered = false
-                endObservation()
-                installStatus = "Install failed: \(error.localizedDescription)"
-                installServer?.stop()
-                installServer = nil
-                InstallKeepAlive.shared.stop()
-            }
-            if bgTask != .invalid {
-                UIApplication.shared.endBackgroundTask(bgTask)
-                bgTask = .invalid
+                self.finish(id: id, status: "Install failed: \(error.localizedDescription)")
             }
         }
+        operation?.task = task
     }
 
-    /// Re-opens the local HTTP install page in Safari.
+    func cancelInstall(markFailed: Bool = false) {
+        guard let id = operation?.id else { return }
+        operation?.task?.cancel()
+        let message = markFailed ? "Install failed: Background execution ended." : "Install cancelled."
+        finish(id: id, status: message)
+    }
+
+    private func finish(id: UUID, status: String?) {
+        guard let current = operation, current.id == id else { return }
+        current.server?.stop()
+        InstallKeepAlive.shared.stop()
+        endObservation()
+        if current.backgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(current.backgroundTask)
+        }
+        if let status { installStatus = status }
+        if let recordID = current.recordID, status?.hasPrefix("Install failed") == true {
+            NotificationCenter.default.post(name: .forgeInstallState, object: nil,
+                                            userInfo: ["recordID": recordID, "state": SigningRecord.InstallState.failed.rawValue])
+        }
+        installServer = nil
+        operation = nil
+        onDelivered = nil
+    }
+
     func openInstallPage() {
         guard let server = installServer else { return }
         guard let page = URL(string: "\(server.installBaseURL)/install") else { return }
         installStatus = "Opening install page in Safari…"
         UIApplication.shared.open(page)
     }
+}
+
+extension Notification.Name {
+    static let forgeInstallStarted = Notification.Name("ForgeSign.installStarted")
+    static let forgeInstallState = Notification.Name("ForgeSign.installState")
 }

@@ -11,6 +11,7 @@
 #include <openssl/pkcs12.h>
 #include <openssl/x509.h>
 #include <openssl/evp.h>
+#include <openssl/cms.h>
 
 using namespace std;
 
@@ -110,25 +111,56 @@ static bool FSSanitizeICloudEntitlements(string& entitlementData)
     return true;
 }
 
+static bool FSValidateExtractedIPA(const string& folder, string& appFolder, string& error)
+{
+    const string payload = folder + "/Payload";
+    if (!ZFile::IsFolder(payload.c_str())) {
+        error = "IPA is missing a Payload directory.";
+        return false;
+    }
+
+    size_t appCount = 0;
+    ZFile::EnumFolder(payload.c_str(), false, NULL, [&](bool bFolder, const string& path) {
+        if (bFolder && ZFile::IsPathSuffix(path, ".app")) {
+            ++appCount;
+            appFolder = path;
+        }
+        return false;
+    });
+    if (appCount != 1) {
+        error = appCount == 0 ? "IPA must contain one Payload/*.app bundle."
+                              : "IPA contains more than one Payload/*.app bundle.";
+        return false;
+    }
+
+    const string executable = FSReadPlistString(appFolder + "/Info.plist", "CFBundleExecutable");
+    if (!ZFile::IsRegularFile((appFolder + "/Info.plist").c_str()) || executable.empty() ||
+        !ZFile::IsRegularFile((appFolder + "/" + executable).c_str())) {
+        error = "IPA app bundle is missing Info.plist or its executable.";
+        return false;
+    }
+    return true;
+}
+
 // ForgeSign on-device signing bridge.
 // Signs an IPA using zsign (userspace codesign) with a .p12 + password + profile.
 // Returns 0 on success, non-zero on failure. Writes a short status message into
 // msgBuf (NUL-terminated) for the UI.
-extern "C" int forgesign_sign_ipa(const char* ipaPath,
-                                  const char* p12Path,
-                                  const char* password,
-                                  const char* provPath,
-                                  const char* bundleId,
-                                  const char* outputPath,
-                                  const char* tempFolder,
-                                  int removeExtensions,
-                                  int enableDocuments,
-                                  char* msgBuf,
-                                  int msgBufLen,
-                                  char* bundleIdBuf,
-                                  int bundleIdBufLen,
-                                  char* versionBuf,
-                                  int versionBufLen)
+static int FS_SignIPA(const char* ipaPath,
+                      const char* p12Path,
+                      const char* password,
+                      const char* profilePaths,
+                      const char* bundleId,
+                      const char* outputPath,
+                      const char* tempFolder,
+                      int removeExtensions,
+                      int enableDocuments,
+                      char* msgBuf,
+                      int msgBufLen,
+                      char* bundleIdBuf,
+                      int bundleIdBufLen,
+                      char* versionBuf,
+                      int versionBufLen)
 {
     auto setMsg = [&](const string& m) {
         if (msgBuf && msgBufLen > 0) {
@@ -141,12 +173,12 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
     string strIpa = ipaPath ? ipaPath : "";
     string strP12 = p12Path ? p12Path : "";
     string strPassword = password ? password : "";
-    string strProv = provPath ? provPath : "";
+    string strProfiles = profilePaths ? profilePaths : "";
     string strBundleId = bundleId ? bundleId : "";
     string strOutput = outputPath ? outputPath : "";
     string strTemp = tempFolder ? tempFolder : "";
 
-    if (strIpa.empty() || strP12.empty() || strProv.empty() || strOutput.empty()) {
+    if (strIpa.empty() || strP12.empty() || strProfiles.empty() || strOutput.empty()) {
         setMsg("Missing input path, certificate, profile, or output path.");
         return 1;
     }
@@ -158,10 +190,6 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
         setMsg("Certificate (.p12) not found.");
         return 3;
     }
-    if (!ZFile::IsFileExists(strProv.c_str())) {
-        setMsg("Provisioning profile not found.");
-        return 4;
-    }
     if (!ZFile::IsZipFile(strIpa.c_str())) {
         setMsg("Input is not a valid IPA/zip.");
         return 5;
@@ -171,19 +199,41 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
         return 6;
     }
 
-    // Init signing asset from p12 + password + profile.
-    ZSignAsset zsa;
-    if (!zsa.Init("", strP12, strProv, "", strPassword, false, true, false)) {
-        setMsg("Failed to load certificate/profile. Check the P12 password and that the profile matches the certificate.");
-        return 10;
+    list<ZSignAsset> signAssets;
+    size_t start = 0;
+    while (start <= strProfiles.size()) {
+        size_t end = strProfiles.find('\n', start);
+        if (end == string::npos) end = strProfiles.size();
+        string profile = strProfiles.substr(start, end - start);
+        if (profile.empty() || !ZFile::IsFileExists(profile.c_str())) {
+            setMsg("Provisioning profile not found.");
+            return 4;
+        }
+        signAssets.emplace_back();
+        if (!signAssets.back().Init("", strP12, profile, "", strPassword, false, true, false)) {
+            setMsg("Failed to load certificate/profile. Check the P12 password and that the profile matches the certificate.");
+            return 10;
+        }
+        FSSanitizeICloudEntitlements(signAssets.back().m_strEntitleData);
+        if (end == strProfiles.size()) break;
+        start = end + 1;
     }
-
-    FSSanitizeICloudEntitlements(zsa.m_strEntitleData);
+    if (signAssets.empty()) {
+        setMsg("No provisioning profiles were supplied.");
+        return 4;
+    }
 
     // Extract IPA to a working folder.
     string strFolder = ZFile::GetRealPathV("%s/fs_folder_%llu", strTemp.c_str(), ZUtil::GetMicroSecond());
     if (!Zip::Extract(strIpa.c_str(), strFolder.c_str())) {
         setMsg("Failed to extract IPA.");
+        return 11;
+    }
+    string extractedApp;
+    string structureError;
+    if (!FSValidateExtractedIPA(strFolder, extractedApp, structureError)) {
+        ZFile::RemoveFolder(strFolder.c_str());
+        setMsg(structureError);
         return 11;
     }
 
@@ -197,7 +247,7 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
 
     vector<string> arrDylibs;
     vector<string> arrRemoveDylibs;
-    bool bRet = bundle.SignFolder(&zsa, strFolder, strBundleId, "", "",
+    bool bRet = bundle.SignFolder(&signAssets, strFolder, strBundleId, "", "",
                                   arrDylibs, arrRemoveDylibs,
                                   true,   // force
                                   false,  // weak inject
@@ -241,6 +291,48 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
     return 0;
 }
 
+extern "C" int forgesign_sign_ipa(const char* ipaPath,
+                                   const char* p12Path,
+                                   const char* password,
+                                   const char* provPath,
+                                   const char* bundleId,
+                                   const char* outputPath,
+                                   const char* tempFolder,
+                                   int removeExtensions,
+                                   int enableDocuments,
+                                   char* msgBuf,
+                                   int msgBufLen,
+                                   char* bundleIdBuf,
+                                   int bundleIdBufLen,
+                                   char* versionBuf,
+                                   int versionBufLen)
+{
+    return FS_SignIPA(ipaPath, p12Path, password, provPath, bundleId, outputPath, tempFolder,
+                      removeExtensions, enableDocuments, msgBuf, msgBufLen,
+                      bundleIdBuf, bundleIdBufLen, versionBuf, versionBufLen);
+}
+
+extern "C" int forgesign_sign_ipa_profiles(const char* ipaPath,
+                                            const char* p12Path,
+                                            const char* password,
+                                            const char* profilePaths,
+                                            const char* bundleId,
+                                            const char* outputPath,
+                                            const char* tempFolder,
+                                            int removeExtensions,
+                                            int enableDocuments,
+                                            char* msgBuf,
+                                            int msgBufLen,
+                                            char* bundleIdBuf,
+                                            int bundleIdBufLen,
+                                            char* versionBuf,
+                                            int versionBufLen)
+{
+    return FS_SignIPA(ipaPath, p12Path, password, profilePaths, bundleId, outputPath, tempFolder,
+                      removeExtensions, enableDocuments, msgBuf, msgBufLen,
+                      bundleIdBuf, bundleIdBufLen, versionBuf, versionBufLen);
+}
+
 // Read-only IPA inspection used by the UI before signing. This deliberately
 // has its own bridge entry point: it extracts into a disposable folder and
 // never creates, modifies, signs, or repackages an IPA.
@@ -255,20 +347,6 @@ static bool FSHasMachOMagic(const string& path)
                magic == FAT_MAGIC || magic == FAT_CIGAM);
     fclose(fp);
     return ok;
-}
-
-static string FSFindPayloadApp(const string& folder)
-{
-    string payload = folder + "/Payload";
-    string appFolder;
-    ZFile::EnumFolder(payload.c_str(), false, NULL, [&](bool bFolder, const string& path) {
-        if (bFolder && ZFile::IsPathSuffix(path, ".app")) {
-            appFolder = path;
-            return true;
-        }
-        return false;
-    });
-    return appFolder;
 }
 
 static bool FSIsTopLevelAppExtension(const string& appFolder, const string& path)
@@ -377,9 +455,10 @@ extern "C" int forgesign_inject_dylib_ipa(const char* ipaPath,
         return code;
     };
 
-    string appFolder = FSFindPayloadApp(strFolder);
-    if (appFolder.empty()) {
-        return fail(8, "No Payload/*.app bundle was found.");
+    string appFolder;
+    string structureError;
+    if (!FSValidateExtractedIPA(strFolder, appFolder, structureError)) {
+        return fail(8, structureError);
     }
 
     string dylibName = ZUtil::GetBaseName(strDylib.c_str());
@@ -491,10 +570,11 @@ extern "C" int forgesign_inspect_ipa(const char* ipaPath,
         return 5;
     }
 
-    string appFolder = FSFindPayloadApp(strFolder);
-    if (appFolder.empty()) {
+    string appFolder;
+    string structureError;
+    if (!FSValidateExtractedIPA(strFolder, appFolder, structureError)) {
         ZFile::RemoveFolder(strFolder.c_str());
-        setMsg("No Payload/*.app bundle was found.");
+        setMsg(structureError);
         return 6;
     }
 
@@ -594,6 +674,85 @@ static void FSCopyNameEntry(X509_NAME* name, int nid, char* buf, int len)
     OPENSSL_free(utf8);
 }
 
+extern "C" int forgesign_verify_ipa(const char* ipaPath,
+                                      const char* tempFolder,
+                                      char* msgBuf,
+                                      int msgBufLen)
+{
+    auto setMsg = [&](const string& message) {
+        if (msgBuf && msgBufLen > 0) snprintf(msgBuf, msgBufLen, "%s", message.c_str());
+    };
+    string ipa = ipaPath ? ipaPath : "";
+    string temp = tempFolder ? tempFolder : "";
+    if (ipa.empty() || temp.empty() || !ZFile::IsFileExists(ipa.c_str()) || !ZFile::IsFolder(temp.c_str())) {
+        setMsg("Signed IPA or verification folder is unavailable.");
+        return 1;
+    }
+    string folder = ZFile::GetRealPathV("%s/fs_verify_%llu", temp.c_str(), ZUtil::GetMicroSecond());
+    if (!Zip::Extract(ipa.c_str(), folder.c_str())) {
+        setMsg("Signed IPA could not be extracted for verification.");
+        return 2;
+    }
+
+    string appFolder;
+    string structureError;
+    if (!FSValidateExtractedIPA(folder, appFolder, structureError)) {
+        ZFile::RemoveFolder(folder.c_str());
+        setMsg(structureError);
+        return 3;
+    }
+
+    bool ok = true;
+    string failure;
+    ZFile::EnumFolder(appFolder.c_str(), true, NULL, [&](bool bFolder, const string& path) {
+        if (bFolder) return false;
+        if (!ZFile::IsRegularFile(path.c_str()) || !FSHasMachOMagic(path)) return false;
+        ZMachO macho;
+        if (!macho.Init(path.c_str()) || !macho.CheckSignature()) {
+            ok = false;
+            failure = "An executable is not signed: " + path.substr(appFolder.size() + 1);
+            return true;
+        }
+        if (macho.IsEncrypted()) {
+            ok = false;
+            failure = "An executable remains encrypted: " + path.substr(appFolder.size() + 1);
+            return true;
+        }
+        return false;
+    });
+
+    if (ok) {
+        vector<string> provisionedBundles;
+        provisionedBundles.push_back(appFolder);
+        ZFile::EnumFolder(appFolder.c_str(), true, NULL, [&](bool bFolder, const string& path) {
+            if (bFolder && (ZFile::IsPathSuffix(path, ".appex") || ZFile::IsPathSuffix(path, ".app"))) {
+                provisionedBundles.push_back(path);
+            }
+            return false;
+        });
+        for (const string& bundlePath : provisionedBundles) {
+            if (!ZFile::IsFileExists((bundlePath + "/_CodeSignature/CodeResources").c_str())) {
+                ok = false;
+                failure = "Missing CodeResources: " + bundlePath.substr(appFolder.size() + 1);
+                break;
+            }
+            if (!ZFile::IsFileExists((bundlePath + "/embedded.mobileprovision").c_str())) {
+                ok = false;
+                failure = "Missing embedded provisioning profile: " + bundlePath.substr(appFolder.size() + 1);
+                break;
+            }
+        }
+    }
+
+    ZFile::RemoveFolder(folder.c_str());
+    if (!ok) {
+        setMsg(failure.empty() ? "Signed IPA verification failed." : failure);
+        return 4;
+    }
+    setMsg("Signed IPA verified.");
+    return 0;
+}
+
 extern "C" int forgesign_p12_info(const char* p12Path,
                                   const char* password,
                                   char* cnBuf,
@@ -658,6 +817,72 @@ extern "C" int forgesign_p12_info(const char* p12Path,
 
     if (pkey) EVP_PKEY_free(pkey);
     X509_free(cert);
+    return 0;
+}
+
+extern "C" int forgesign_profile_info(const char* profilePath,
+                                      char* msgBuf,
+                                      int msgBufLen)
+{
+    auto setMsg = [&](const string& message) {
+        if (msgBuf && msgBufLen > 0) snprintf(msgBuf, msgBufLen, "%s", message.c_str());
+    };
+    if (!profilePath) {
+        setMsg("Missing provisioning profile path.");
+        return 1;
+    }
+
+    FILE* fp = fopen(profilePath, "rb");
+    if (!fp) {
+        setMsg("Provisioning profile could not be opened.");
+        return 2;
+    }
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (size <= 0) {
+        fclose(fp);
+        setMsg("Provisioning profile is empty.");
+        return 3;
+    }
+    string data((size_t)size, '\0');
+    size_t read = fread(&data[0], 1, data.size(), fp);
+    fclose(fp);
+    if (read != data.size()) {
+        setMsg("Provisioning profile could not be read.");
+        return 3;
+    }
+
+    BIO* input = BIO_new_mem_buf(data.data(), (int)data.size());
+    CMS_ContentInfo* cms = input ? d2i_CMS_bio(input, NULL) : NULL;
+    if (input) BIO_free(input);
+    if (!cms) {
+        setMsg("Provisioning profile is not a valid CMS container.");
+        return 4;
+    }
+
+    BIO* content = BIO_new(BIO_s_mem());
+    int verified = content && CMS_verify(cms, NULL, NULL, NULL, content, CMS_BINARY | CMS_NO_SIGNER_CERT_VERIFY);
+    if (!verified) {
+        if (content) BIO_free(content);
+        CMS_ContentInfo_free(cms);
+        setMsg("Provisioning profile CMS signature is invalid.");
+        return 5;
+    }
+
+    BUF_MEM* memory = NULL;
+    BIO_get_mem_ptr(content, &memory);
+    string plist = (memory && memory->data && memory->length)
+        ? string(memory->data, memory->length) : string();
+    BIO_free(content);
+    CMS_ContentInfo_free(cms);
+
+    jvalue profile;
+    if (plist.empty() || !profile.read_plist(plist) || !profile.has("Entitlements") ||
+        !profile["Entitlements"].is_object()) {
+        setMsg("Provisioning profile payload is invalid.");
+        return 6;
+    }
     return 0;
 }
 

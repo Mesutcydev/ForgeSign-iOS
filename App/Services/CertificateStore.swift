@@ -35,6 +35,7 @@ final class CertificateStore: ObservableObject {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         indexURL = base.appendingPathComponent("certificates.json")
         load()
+        removeLegacyPasswordFiles()
     }
 
     var selected: CertificateRecord? {
@@ -58,7 +59,7 @@ final class CertificateStore: ObservableObject {
             switch self {
             case .unreadable: return "The file could not be read."
             case .badPassword: return "Wrong password, or not a valid signing certificate."
-            case .copyFailed: return "The certificate could not be saved."
+            case .copyFailed: return "The certificate could not be saved, or its password could not be stored securely."
             }
         }
     }
@@ -103,7 +104,10 @@ final class CertificateStore: ObservableObject {
         )
 
         if rememberPassword {
-            PasswordVault.save(password, for: record.id)
+            guard PasswordVault.save(password, for: record.id) else {
+                try? FileManager.default.removeItem(at: dest)
+                return .failure(.copyFailed)
+            }
             record.hasSavedPassword = true
         }
 
@@ -134,30 +138,23 @@ final class CertificateStore: ObservableObject {
     private func save() {
         let index = Index(certificates: certificates, selectedID: selectedID)
         if let data = try? JSONEncoder().encode(index) {
-            try? data.write(to: indexURL, options: .completeFileProtection)
+            try? ProtectedPersistence.write(data, to: indexURL)
         }
+    }
+
+    private func removeLegacyPasswordFiles() {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.removeItem(at: base.appendingPathComponent("PassVault", isDirectory: true))
     }
 }
 
-/// Passwords for remembered certificates. Prefers the iOS Keychain; when the
-/// Keychain is unavailable (e.g. an ad-hoc signed build without the
-/// application-identifier entitlement), falls back to a file protected by
-/// iOS data protection (completeFileProtection).
+/// Passwords for remembered certificates. Passwords are kept only in the
+/// device-bound Keychain; when Keychain storage is unavailable, remembering is
+/// refused and the password must remain in memory for the current signing pass.
 enum PasswordVault {
     private static let service = "com.forgesign.mobile.p12"
 
-    private static let fallbackDir: URL = {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("PassVault", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
-
-    private static func fallbackURL(for id: UUID) -> URL {
-        fallbackDir.appendingPathComponent(id.uuidString)
-    }
-
-    static func save(_ password: String, for id: UUID) {
+    static func save(_ password: String, for id: UUID) -> Bool {
         delete(for: id)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -166,10 +163,7 @@ enum PasswordVault {
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
             kSecValueData as String: Data(password.utf8)
         ]
-        if SecItemAdd(query as CFDictionary, nil) == errSecSuccess {
-            return
-        }
-        try? Data(password.utf8).write(to: fallbackURL(for: id), options: .completeFileProtection)
+        return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
     }
 
     static func password(for id: UUID) -> String? {
@@ -181,15 +175,9 @@ enum PasswordVault {
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         var item: CFTypeRef?
-        if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-           let data = item as? Data,
-           let password = String(data: data, encoding: .utf8) {
-            return password
-        }
-        if let data = try? Data(contentsOf: fallbackURL(for: id)) {
-            return String(data: data, encoding: .utf8)
-        }
-        return nil
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     static func delete(for id: UUID) {
@@ -199,6 +187,8 @@ enum PasswordVault {
             kSecAttrAccount as String: id.uuidString
         ]
         SecItemDelete(query as CFDictionary)
-        try? FileManager.default.removeItem(at: fallbackURL(for: id))
+        let legacyDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("PassVault", isDirectory: true)
+        try? FileManager.default.removeItem(at: legacyDir.appendingPathComponent(id.uuidString))
     }
 }

@@ -1,0 +1,56 @@
+name: ForgeSign iOS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Check formatting
+        run: git diff --check
+
+      - name: Run simulator tests
+        run: |
+          xcodebuild test \
+            -project ForgeSignMobile.xcodeproj \
+            -scheme ForgeSignMobileTests \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Build device Release target
+        run: |
+          xcodebuild build \
+            -project ForgeSignMobile.xcodeproj \
+            -scheme ForgeSignMobile \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/ci-derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO
+
+      - name: Package unsigned IPA
+        run: |
+          rm -rf build/ci-ipa
+          mkdir -p build/ci-ipa/Payload
+          ditto build/ci-derived/Build/Products/Release-iphoneos/ForgeSign.app build/ci-ipa/Payload/ForgeSign.app
+          (cd build/ci-ipa && zip -qry ../ForgeSign-latest.ipa Payload)
+
+      - name: Validate current IPA structure
+        run: |
+          test -f build/ForgeSign-latest.ipa
+          unzip -t build/ForgeSign-latest.ipa
+          test "$(unzip -Z1 build/ForgeSign-latest.ipa | grep -c '^Payload/[^/]*/$')" -eq 1
+          unzip -Z1 build/ForgeSign-latest.ipa | grep -Fx 'Payload/ForgeSign.app/ForgeSign'
+          ! unzip -Z1 build/ForgeSign-latest.ipa | grep -E '\.(debug\.dylib|preview\.dylib)$'

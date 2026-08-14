@@ -158,6 +158,8 @@ struct LibraryView: View {
                 GlassStatusPill(text: "signed", color: T.accent)
             case .installing:
                 GlassStatusPill(text: "installing", color: T.warn)
+            case .delivered:
+                GlassStatusPill(text: "delivered", color: T.good)
             case .installed:
                 GlassStatusPill(text: "installed", color: T.good)
             case .failed:

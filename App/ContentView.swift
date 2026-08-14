@@ -9,6 +9,7 @@ struct ContentView: View {
     @EnvironmentObject private var history: HistoryStore
     @EnvironmentObject private var install: InstallController
     @EnvironmentObject private var repoStore: RepositoryStore
+    @EnvironmentObject private var imports: ImportRouter
     @Environment(\.forgeTheme) private var T
 
     @State private var ipaURL: URL?
@@ -28,6 +29,7 @@ struct ContentView: View {
     @State private var showCertSheet = false
     @State private var showDylibImporter = false
     @State private var showShare = false
+    @State private var importError: String?
 
     var body: some View {
         NavigationStack {
@@ -71,11 +73,22 @@ struct ContentView: View {
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
                 .fileImporter(isPresented: $showIPAImporter, allowedContentTypes: [.zip, UTType(filenameExtension: "ipa") ?? .zip]) { result in
-                    if case .success(let url) = result { stageIPA(url) }
+                    switch result {
+                    case .success(let url): stageIPA(url)
+                    case .failure: importError = "The IPA could not be selected. Please try again."
+                    }
                 }
                 .fileImporter(isPresented: $showDylibImporter,
                               allowedContentTypes: [UTType(filenameExtension: "dylib") ?? .data]) { result in
-                    if case .success(let url) = result { stageDylib(url) }
+                    switch result {
+                    case .success(let url): stageDylib(url)
+                    case .failure: importError = "The dylib could not be selected. Please try again."
+                    }
+                }
+                .alert("Import failed", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+                    Button("OK", role: .cancel) { importError = nil }
+                } message: {
+                    Text(importError ?? "")
                 }
                 .sheet(isPresented: $showProfileSheet) {
                     ProfilesSheet()
@@ -86,16 +99,19 @@ struct ContentView: View {
                 .sheet(isPresented: $showShare) {
                     if let signedIPA { ShareSheet(items: [signedIPA]) }
                 }
-                .onChange(of: install.installStatus) { status in
-                    if status.hasPrefix("Install failed"), let id = lastRecordID {
-                        history.setInstallState(.failed, for: id)
-                    }
-                }
                 .onChange(of: repoStore.pendingIPA) { pending in
                     // A repo download landed — load it as the input to sign.
                     if let pending {
                         stageIPA(pending, fallbackToSource: true)
                         repoStore.pendingIPA = nil
+                    }
+                }
+                .onChange(of: imports.pending) { _ in
+                    guard let request = imports.consume() else { return }
+                    switch request {
+                    case .ipa(let url): stageIPA(url)
+                    case .dylib(let url): stageDylib(url)
+                    case .unsupported: break
                     }
                 }
             }
@@ -365,8 +381,13 @@ struct ContentView: View {
 
         ipaURL = localURL
         signer.pruneStagedArchives(keeping: localURL)
+        guard FileManager.default.fileExists(atPath: localURL.path) else {
+            ipaURL = nil
+            preflightState = .failed("The staged IPA is no longer available. Please choose it again.")
+            return
+        }
         preflightState = .inspecting
-        let temporaryDirectory = signer.workDir
+        let temporaryDirectory = signer.tempDir
 
         Task.detached(priority: .utility) {
             let result = IPAPreflightService.inspect(ipa: localURL,
@@ -394,8 +415,23 @@ struct ContentView: View {
         return password.isEmpty ? nil : password
     }
 
+    private var compatibilityIssues: [String] {
+        let inspection: IPAPreflight?
+        if case .ready(let value) = preflightState {
+            inspection = value
+        } else {
+            inspection = nil
+        }
+        return SigningCompatibility.issues(
+            inspection: inspection,
+            certificate: certStore.selected,
+            profile: profileStore.selected,
+            bundleID: bundleId
+        )
+    }
+
     private var canSign: Bool {
-        ipaURL != nil && certStore.selected != nil && profileStore.selected != nil && effectivePassword != nil
+        ipaURL != nil && effectivePassword != nil && compatibilityIssues.isEmpty
     }
 
     private func sign() {
@@ -404,7 +440,8 @@ struct ContentView: View {
               let pw = effectivePassword,
               let profile = profileStore.selected else { return }
         let p12 = certStore.fileURL(for: cert)
-        let profileFile = profileStore.fileURL(for: profile)
+        let profileFiles = [profile] + profileStore.profiles.filter { $0.id != profile.id && $0.profileIsAuthentic }
+        let profileURLs = profileFiles.map { profileStore.fileURL(for: $0) }
         let certCN = cert.commonName
 
         signer.phase = .signing
@@ -414,8 +451,9 @@ struct ContentView: View {
         install.installServer?.stop()
         install.installServer = nil
         InstallKeepAlive.shared.stop()
-        let outName = ipa.deletingPathExtension().lastPathComponent + "-signed.ipa"
-        let output = history.signedDir.appendingPathComponent(outName)
+        let output = history.uniqueOutputURL(for: ipa.lastPathComponent)
+        let outName = output.lastPathComponent
+        let partialOutput = signer.tempDir.appendingPathComponent("signed-\(UUID().uuidString).ipa.partial")
         let tempDir = signer.tempDir
         let bid = bundleId.trimmingCharacters(in: .whitespaces)
         let rmExt = removeExtensions
@@ -446,15 +484,24 @@ struct ContentView: View {
                 signingIPA = ipa
             }
 
-            let result = SigningService.sign(ipa: signingIPA, p12: p12, password: pw, profile: profileFile,
-                                             bundleId: bid, output: output, tempDir: tempDir,
+            let result = SigningService.sign(ipa: signingIPA, p12: p12, password: pw, profiles: profileURLs,
+                                             bundleId: bid, output: partialOutput, tempDir: tempDir,
                                              removeExtensions: rmExt, enableDocuments: enDocs)
             if let preparedIPA {
                 try? FileManager.default.removeItem(at: preparedIPA)
             }
+            let verification = result.ok
+                ? SigningService.verify(ipa: partialOutput, temporaryDirectory: tempDir)
+                : (ok: false, message: result.message)
             await MainActor.run {
-                signer.cleanTemp()
-                if result.ok {
+                defer { signer.cleanTemp() }
+                guard result.ok, verification.ok else {
+                    try? FileManager.default.removeItem(at: partialOutput)
+                    signer.phase = .failed(result.ok ? verification.message : result.message)
+                    return
+                }
+                do {
+                    try FileManager.default.moveItem(at: partialOutput, to: output)
                     signedIPA = output
                     signedBundleId = result.signedBundleId
                     signedVersion = result.signedVersion
@@ -465,8 +512,9 @@ struct ContentView: View {
                                                 version: result.signedVersion,
                                                 certificateCN: certCN)
                     lastRecordID = record.id
-                } else {
-                    signer.phase = .failed(result.message)
+                } catch {
+                    try? FileManager.default.removeItem(at: partialOutput)
+                    signer.phase = .failed("The signed IPA could not be finalized in the library.")
                 }
             }
         }
@@ -478,12 +526,7 @@ struct ContentView: View {
         if let recordID {
             history.setInstallState(.installing, for: recordID)
         }
-        install.onDelivered = {
-            if let recordID {
-                history.setInstallState(.installed, for: recordID)
-            }
-        }
-        install.install(ipa: ipa, bundleId: signedBundleId, version: signedVersion)
+        install.install(ipa: ipa, bundleId: signedBundleId, version: signedVersion, recordID: recordID)
     }
 }
 
