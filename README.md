@@ -44,7 +44,7 @@ Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the
 
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-1.2.ipa` from the [latest release](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
+Grab `ForgeSign-1.3.ipa` from the [latest release](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
@@ -52,7 +52,13 @@ Grab `ForgeSign-1.2.ipa` from the [latest release](https://github.com/Mesutcydev
 
 Only sign and install applications you have the rights to modify. Intended for your own builds and development use.
 
-## What’s new in 1.2
+## What’s new in 1.3
+
+- Wildcard and placeholder iCloud entitlements are removed before signing so Files document pickers continue working in installed apps.
+- Valid iCloud container entitlements are preserved, while the existing document-browser workaround remains in place.
+- 1.2 install reliability, staging cleanup, and Sources feed fixes are included.
+
+## What was new in 1.2
 
 - Install server honours HTTP Range requests, so flaky installs resume instead of restarting.
 - Silent-audio keep-alive stops as soon as you return without a download, not only after delivery.

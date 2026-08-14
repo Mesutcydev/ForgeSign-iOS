@@ -50,6 +50,66 @@ static string FSReadPlistString(const string& path, const string& key)
     return result;
 }
 
+static bool FSSanitizeICloudEntitlements(string& entitlementData)
+{
+    if (entitlementData.empty()) return false;
+
+    jvalue entitlements;
+    if (!entitlements.read_plist(entitlementData)) {
+        ZLog::Warn(">>> Could not parse profile entitlements; leaving them unchanged\n");
+        return false;
+    }
+
+    const char* containerKeys[] = {
+        "com.apple.developer.icloud-container-identifiers",
+        "com.apple.developer.ubiquity-container-identifiers",
+        "com.apple.developer.icloud-container-development-container-identifiers",
+    };
+    bool hasConcreteContainer = false;
+    for (const char* key : containerKeys) {
+        if (!entitlements.has(key) || !entitlements.at(key).is_array()) continue;
+        const jvalue& containers = entitlements.at(key);
+        for (size_t i = 0; i < containers.size(); ++i) {
+            if (!containers.at(i).is_string()) continue;
+            const string identifier = containers.at(i).as_string();
+            if (identifier.find_first_not_of(" \t\r\n") == string::npos ||
+                identifier.find('*') != string::npos) {
+                continue;
+            }
+            hasConcreteContainer = true;
+            break;
+        }
+        if (hasConcreteContainer) break;
+    }
+
+    if (hasConcreteContainer) return false;
+
+    bool changed = false;
+    for (const char* key : containerKeys) {
+        if (entitlements.has(key)) {
+            entitlements.erase(key);
+            changed = true;
+        }
+    }
+    const char* placeholderKeys[] = {
+        "com.apple.developer.icloud-services",
+        "com.apple.developer.ubiquity-kvstore-identifier",
+        "com.apple.developer.icloud-container-environment",
+    };
+    for (const char* key : placeholderKeys) {
+        if (entitlements.has(key)) {
+            entitlements.erase(key);
+            changed = true;
+        }
+    }
+    if (!changed) return false;
+
+    entitlementData.clear();
+    entitlements.style_write_plist(entitlementData);
+    ZLog::Print(">>> Stripped unusable iCloud entitlements (Files picker fix)\n");
+    return true;
+}
+
 // ForgeSign on-device signing bridge.
 // Signs an IPA using zsign (userspace codesign) with a .p12 + password + profile.
 // Returns 0 on success, non-zero on failure. Writes a short status message into
@@ -118,61 +178,7 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
         return 10;
     }
 
-    // Fat wildcard profiles often ship empty iCloud/ubiquity container lists
-    // with icloud-services=*. Stamping those onto an app that never used iCloud
-    // breaks UIDocumentPicker (Open enabled, does nothing) after resign, while
-    // AltServer's lean profiles do not. Strip the empty-container iCloud keys.
-    if (!zsa.m_strEntitleData.empty()) {
-        jvalue jvEnt;
-        if (jvEnt.read_plist(zsa.m_strEntitleData)) {
-            auto emptyArray = [](jvalue& v) {
-                return !v.is_array() || v.size() == 0;
-            };
-            bool changed = false;
-            const char* containerKeys[] = {
-                "com.apple.developer.icloud-container-identifiers",
-                "com.apple.developer.ubiquity-container-identifiers",
-                "com.apple.developer.icloud-container-development-container-identifiers",
-            };
-            bool hasUsableContainers = false;
-            for (const char* key : containerKeys) {
-                if (!jvEnt.has(key)) continue;
-                if (!emptyArray(jvEnt[key])) {
-                    hasUsableContainers = true;
-                    break;
-                }
-            }
-            // Some wildcard profiles omit the container keys entirely while
-            // still supplying iCloud services/kvstore placeholders. Those
-            // leftovers are just as capable of disabling UIDocumentPicker.
-            if (!hasUsableContainers) {
-                for (const char* key : containerKeys) {
-                    if (jvEnt.has(key)) {
-                        jvEnt.erase(key);
-                        changed = true;
-                    }
-                }
-                if (jvEnt.has("com.apple.developer.icloud-services")) {
-                    jvEnt.erase("com.apple.developer.icloud-services");
-                    changed = true;
-                }
-                if (jvEnt.has("com.apple.developer.ubiquity-kvstore-identifier")) {
-                    // Keep kvstore only when real containers exist.
-                    jvEnt.erase("com.apple.developer.ubiquity-kvstore-identifier");
-                    changed = true;
-                }
-                if (jvEnt.has("com.apple.developer.icloud-container-environment")) {
-                    jvEnt.erase("com.apple.developer.icloud-container-environment");
-                    changed = true;
-                }
-            }
-            if (changed) {
-                zsa.m_strEntitleData.clear();
-                jvEnt.style_write_plist(zsa.m_strEntitleData);
-                ZLog::Print(">>> Stripped empty iCloud container entitlements (Files picker fix)\n");
-            }
-        }
-    }
+    FSSanitizeICloudEntitlements(zsa.m_strEntitleData);
 
     // Extract IPA to a working folder.
     string strFolder = ZFile::GetRealPathV("%s/fs_folder_%llu", strTemp.c_str(), ZUtil::GetMicroSecond());
