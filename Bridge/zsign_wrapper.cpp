@@ -134,17 +134,18 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
                 "com.apple.developer.ubiquity-container-identifiers",
                 "com.apple.developer.icloud-container-development-container-identifiers",
             };
-            bool containersEmpty = true;
-            bool hadContainerKey = false;
+            bool hasUsableContainers = false;
             for (const char* key : containerKeys) {
                 if (!jvEnt.has(key)) continue;
-                hadContainerKey = true;
                 if (!emptyArray(jvEnt[key])) {
-                    containersEmpty = false;
+                    hasUsableContainers = true;
                     break;
                 }
             }
-            if (hadContainerKey && containersEmpty) {
+            // Some wildcard profiles omit the container keys entirely while
+            // still supplying iCloud services/kvstore placeholders. Those
+            // leftovers are just as capable of disabling UIDocumentPicker.
+            if (!hasUsableContainers) {
                 for (const char* key : containerKeys) {
                     if (jvEnt.has(key)) {
                         jvEnt.erase(key);
@@ -158,6 +159,10 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
                 if (jvEnt.has("com.apple.developer.ubiquity-kvstore-identifier")) {
                     // Keep kvstore only when real containers exist.
                     jvEnt.erase("com.apple.developer.ubiquity-kvstore-identifier");
+                    changed = true;
+                }
+                if (jvEnt.has("com.apple.developer.icloud-container-environment")) {
+                    jvEnt.erase("com.apple.developer.icloud-container-environment");
                     changed = true;
                 }
             }

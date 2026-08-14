@@ -364,6 +364,7 @@ struct ContentView: View {
         }
 
         ipaURL = localURL
+        signer.pruneStagedArchives(keeping: localURL)
         preflightState = .inspecting
         let temporaryDirectory = signer.workDir
 
@@ -452,6 +453,7 @@ struct ContentView: View {
                 try? FileManager.default.removeItem(at: preparedIPA)
             }
             await MainActor.run {
+                signer.cleanTemp()
                 if result.ok {
                     signedIPA = output
                     signedBundleId = result.signedBundleId

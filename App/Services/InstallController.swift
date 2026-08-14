@@ -11,8 +11,41 @@ final class InstallController: ObservableObject {
     /// Called when the currently served IPA has been fully downloaded.
     var onDelivered: (() -> Void)?
 
+    private var foregroundObserver: (any NSObjectProtocol)?
+
+    /// Tracks whether the current install delivered its IPA yet.
+    private var delivered = false
+
+    /// Coming back to the foreground while a server is still up but nothing was
+    /// downloaded means the installer is not pulling anymore — release the
+    /// silent-audio keep-alive so we don't hold the audio background mode.
+    private func observeForeground() {
+        guard foregroundObserver == nil else { return }
+        foregroundObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.installServer != nil, !self.delivered else { return }
+                InstallKeepAlive.shared.stop()
+                if self.installStatus.hasPrefix("Install prompted") {
+                    self.installStatus = "Back in ForgeSign. If no dialog appeared, try “Retry via Safari”."
+                }
+            }
+        }
+    }
+
+    private func endObservation() {
+        if let observer = foregroundObserver {
+            NotificationCenter.default.removeObserver(observer)
+            foregroundObserver = nil
+        }
+    }
+
     func install(ipa: URL, bundleId: String, version: String) {
         installStatus = "Starting install server…"
+        delivered = false
+        observeForeground()
 
         // Keep the app (and its local server) alive while the iOS installer
         // downloads. A background task alone only buys ~30 seconds; silent
@@ -34,9 +67,12 @@ final class InstallController: ObservableObject {
                 installServer = server
                 server.onIPADelivered = { [weak self] in
                     Task { @MainActor in
-                        self?.installStatus = "IPA delivered. Installing… accept the iOS prompt if shown."
+                        guard let self else { return }
+                        self.delivered = true
+                        self.endObservation()
+                        self.installStatus = "IPA delivered. Installing… accept the iOS prompt if shown."
                         InstallKeepAlive.shared.stop()
-                        self?.onDelivered?()
+                        self.onDelivered?()
                     }
                 }
 
@@ -88,6 +124,8 @@ final class InstallController: ObservableObject {
 
                 try? await Task.sleep(nanoseconds: 30 * 60 * 1_000_000_000)
             } catch {
+                delivered = false
+                endObservation()
                 installStatus = "Install failed: \(error.localizedDescription)"
                 installServer?.stop()
                 installServer = nil

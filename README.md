@@ -2,7 +2,7 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign, install and manage IPAs entirely on the device — no computer, no server, no uploads.
 
-**[Explore the ForgeSign 1.1 site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download the latest unsigned IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)**
+**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download the latest unsigned IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)**
 
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
@@ -44,7 +44,7 @@ Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the
 
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-1.1.ipa` from the [1.1 release](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.1). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
+Grab `ForgeSign-1.2.ipa` from the [latest release](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
@@ -52,7 +52,15 @@ Grab `ForgeSign-1.1.ipa` from the [1.1 release](https://github.com/Mesutcydev/Fo
 
 Only sign and install applications you have the rights to modify. Intended for your own builds and development use.
 
-## What’s new in 1.1
+## What’s new in 1.2
+
+- Install server honours HTTP Range requests, so flaky installs resume instead of restarting.
+- Silent-audio keep-alive stops as soon as you return without a download, not only after delivery.
+- Staged archives are pruned to the current pick and the signing temp folder is wiped on relaunch.
+- Sources feeds use stable row identity (refreshes no longer detach in-flight downloads).
+- Wildcard-profile iCloud entitlement stripping extended to kvstore/container-environment leftovers.
+
+## What was new in 1.1
 
 - Preflight card for package, bundle, encryption and architecture checks.
 - Optional dylib injection with app-extension support for compatible decrypted Mach-O inputs.

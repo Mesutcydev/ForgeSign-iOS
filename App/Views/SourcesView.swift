@@ -228,7 +228,10 @@ struct RepoDetailSheet: View {
                 message(icon: "tray", "This source has no apps.")
             } else {
                 GlassSection("Apps") {
-                    VStack(spacing: 0) {
+                    // Some public sources contain hundreds of apps. Building
+                    // every row and starting every icon request at once can
+                    // exceed the memory budget on iPhone, so render on demand.
+                    LazyVStack(spacing: 0) {
                         ForEach(Array(source.apps.enumerated()), id: \.element.id) { index, app in
                             appRow(app)
                             if index < source.apps.count - 1 {

@@ -80,6 +80,10 @@ struct RepoVersion: Decodable, Equatable, Identifiable {
 /// `downloadURL`, `size` at the top level) and the newer v2 shape where those
 /// live in a `versions` array — the first version still drives downloads.
 struct RepoApp: Decodable, Identifiable, Equatable {
+    /// Source feeds do not guarantee a bundle identifier (or even uniqueness).
+    /// Give each decoded entry its own durable identity so malformed catalogs
+    /// cannot hand SwiftUI duplicate row IDs.
+    let id: UUID
     let name: String
     let bundleIdentifier: String
     let developerName: String?
@@ -90,14 +94,13 @@ struct RepoApp: Decodable, Identifiable, Equatable {
     let size: Int64?
     let versions: [RepoVersion]
 
-    var id: String { bundleIdentifier.isEmpty ? name : bundleIdentifier }
-
     private enum CodingKeys: String, CodingKey {
         case name, bundleIdentifier, developerName, localizedDescription
         case iconURL, version, downloadURL, size, versions
     }
 
     init(from decoder: Decoder) throws {
+        id = UUID()
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = (try? c.decodeIfPresent(String.self, forKey: .name)) ?? "Untitled"
         bundleIdentifier = (try? c.decodeIfPresent(String.self, forKey: .bundleIdentifier)) ?? ""
@@ -153,8 +156,8 @@ final class RepositoryStore: ObservableObject {
     @Published var fetchError: [UUID: String] = [:]
     @Published var loadingRepoID: UUID?
 
-    /// Bundle id of the app currently downloading, if any.
-    @Published var activeDownloadID: String?
+    /// Identity of the app currently downloading, if any.
+    @Published var activeDownloadID: UUID?
     @Published var downloadError: String?
 
     /// Set when a download finishes — the Sign tab observes this and loads it.
@@ -222,9 +225,17 @@ final class RepositoryStore: ObservableObject {
         do {
             var req = URLRequest(url: repo.url)
             req.cachePolicy = .reloadIgnoringLocalCacheData
+            req.timeoutInterval = 30
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            guard let http = resp as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode) else {
                 fetchError[repo.id] = "The repository server returned an error."
+                return
+            }
+            // Catalogs are untrusted. Avoid a pathological source exhausting
+            // the app's memory and being terminated by iOS.
+            guard data.count <= 25 * 1_024 * 1_024 else {
+                fetchError[repo.id] = "This repository catalog is too large to load safely."
                 return
             }
             let source = try JSONDecoder().decode(RepoSource.self, from: data)
@@ -267,7 +278,7 @@ final class RepositoryStore: ObservableObject {
 
     /// A safe on-disk filename like `AppName-1.2.3.ipa`.
     private static func ipaName(for app: RepoApp) -> String {
-        let base = app.name.isEmpty ? app.id : app.name
+        let base = app.name.isEmpty ? app.id.uuidString : app.name
         let stem = base.components(separatedBy: CharacterSet(charactersIn: "/\\:")).joined(separator: "-")
         let version = app.version.map { "-\($0)" } ?? ""
         return "\(stem)\(version).ipa"

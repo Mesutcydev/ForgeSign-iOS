@@ -166,9 +166,23 @@ final class LocalInstallServer: @unchecked Sendable {
         let path = parts.count > 1 ? parts[1] : "/"
         let headOnly = method == "HEAD"
 
+        // The iOS installer retries with `Range:` on flaky connections; honour
+        // single-range byte requests so downloads resume instead of restarting.
+        var range: (start: UInt64, end: UInt64?)?
+        for line in lines.dropFirst() {
+            let lowered = line.lowercased()
+            if lowered.hasPrefix("range: bytes=") {
+                let spec = line.dropFirst("range: bytes=".count)
+                let halves = spec.split(separator: "-", maxSplits: 1).map(String.init)
+                if halves.count == 2, let start = UInt64(halves[0]) {
+                    range = (start, UInt64(halves[1]))
+                }
+            }
+        }
+
         if path.hasPrefix("/app.ipa") {
             if let ipa = ipaURL, FileManager.default.fileExists(atPath: ipa.path) {
-                sendFile(fd, url: ipa, headOnly: headOnly)
+                sendFile(fd, url: ipa, headOnly: headOnly, range: range)
             } else {
                 sendResponse(fd, status: "404 Not Found", contentType: "text/plain",
                              body: Data("not found".utf8), headOnly: false)
@@ -209,35 +223,66 @@ final class LocalInstallServer: @unchecked Sendable {
         sendAll(fd, response)
     }
 
-    private func sendFile(_ fd: Int32, url: URL, headOnly: Bool) {
+    private func sendFile(_ fd: Int32, url: URL, headOnly: Bool, range: (start: UInt64, end: UInt64?)?) {
         guard let handle = try? FileHandle(forReadingFrom: url) else {
             sendResponse(fd, status: "404 Not Found", contentType: "text/plain", body: Data(), headOnly: false)
             return
         }
         let fileSize = handle.seekToEndOfFile()
-        handle.seek(toFileOffset: 0)
-        var header = "HTTP/1.1 200 OK\r\n"
+
+        // Resolve a satisfiable [start, end] window; otherwise full body.
+        var offset: UInt64 = 0
+        var remaining: UInt64 = fileSize
+        var status = "200 OK"
+        var rangeLine = ""
+        if let range, range.start < fileSize {
+            let end = min(range.end ?? (fileSize - 1), fileSize - 1)
+            offset = range.start
+            remaining = end - range.start + 1
+            status = "206 Partial Content"
+            rangeLine = "Content-Range: bytes \(range.start)-\(end)/\(fileSize)\r\n"
+        }
+
+        handle.seek(toFileOffset: offset)
+        var header = "HTTP/1.1 \(status)\r\n"
         header += "Content-Type: application/octet-stream\r\n"
-        header += "Content-Length: \(fileSize)\r\n"
+        header += "Content-Length: \(remaining)\r\n"
+        header += rangeLine
+        header += "Accept-Ranges: bytes\r\n"
         header += "Connection: close\r\n\r\n"
         sendAll(fd, Data(header.utf8))
         if headOnly {
             try? handle.close()
             return
         }
-        while true {
-            let chunk = handle.readData(ofLength: 1024 * 1024)
+        while remaining > 0 {
+            let want = min(UInt64(1024 * 1024), remaining)
+            let chunk = handle.readData(ofLength: Int(want))
             if chunk.isEmpty { break }
+            remaining -= UInt64(chunk.count)
             sendAll(fd, chunk)
         }
         try? handle.close()
-        onIPADelivered?()
+        // Only a fully served file counts as delivered (a 206 may be a retry).
+        if offset == 0 {
+            onIPADelivered?()
+        }
     }
 
     /// Safari-facing page. Redirects into itms-services with the *remote*
     /// HTTPS plist URL (never a local TLS URL).
     private func installPage() -> String {
         let itms = itmsServicesURL
+        // Titles come from filenames; escape before embedding in HTML.
+        func html(_ s: String) -> String {
+            s.replacingOccurrences(of: "&", with: "&amp;")
+             .replacingOccurrences(of: "<", with: "&lt;")
+             .replacingOccurrences(of: ">", with: "&gt;")
+             .replacingOccurrences(of: "\"", with: "&quot;")
+             .replacingOccurrences(of: "'", with: "&#39;")
+        }
+        let safeTitle = html(title)
+        let safeItms = html(itms)
         return """
         <!DOCTYPE html>
         <html>
@@ -265,9 +310,9 @@ final class LocalInstallServer: @unchecked Sendable {
         </style>
         </head>
         <body><div class="bloom b1"></div><div class="bloom b2"></div><div class="card">
-        <h1>Installing \(title)…</h1>
+        <h1>Installing \(safeTitle)…</h1>
         <p>If no prompt appears, tap Install below. Keep ForgeSign open.</p>
-        <a id="install" href="\(itms)">Install</a>
+        <a id="install" href="\(safeItms)">Install</a>
         </div>
         <script>setTimeout(function(){ window.location.assign("\(itms)"); }, 250);</script>
         </body></html>

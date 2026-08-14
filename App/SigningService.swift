@@ -23,6 +23,28 @@ final class SigningService: ObservableObject {
         workDir = base
         tempDir = base.appendingPathComponent("tmp", isDirectory: true)
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        // Partial extracts and injected IPA copies never survive a relaunch.
+        cleanTemp()
+    }
+
+    /// Purges the disposable temp folder (partial extracts, injected IPA copies).
+    func cleanTemp() {
+        if let items = try? FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil) {
+            for item in items {
+                try? FileManager.default.removeItem(at: item)
+            }
+        }
+    }
+
+    /// Removes previously staged IPA/zip files, keeping only the current pick
+    /// so the staging area never grows beyond one archive + one dylib.
+    func pruneStagedArchives(keeping kept: URL?) {
+        guard let items = try? FileManager.default.contentsOfDirectory(at: workDir, includingPropertiesForKeys: nil) else { return }
+        let archiveExtensions: Set<String> = ["ipa", "zip"]
+        for item in items {
+            guard item != kept, archiveExtensions.contains(item.pathExtension.lowercased()) else { continue }
+            try? FileManager.default.removeItem(at: item)
+        }
     }
 
     /// Copies a security-scoped picked file into the app container, returning the local path.
