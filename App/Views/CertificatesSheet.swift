@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Picker + manager for remembered signing certificates. Shows remaining
 /// validity per certificate, imports new .p12 files (validated against a
@@ -53,10 +52,14 @@ struct CertificatesSheet: View {
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
-                .fileImporter(isPresented: $showImporter,
-                              allowedContentTypes: [.pkcs12, UTType(filenameExtension: "pfx") ?? .pkcs12]) { result in
-                    if case .success(let url) = result {
-                        pendingURL = url
+                .sheet(isPresented: $showImporter) {
+                    ForgeDocumentPicker {
+                        showImporter = false
+                        guard ["p12", "pfx"].contains($0.pathExtension.lowercased()) else {
+                            error = "Choose a .p12 or .pfx certificate."
+                            return
+                        }
+                        pendingURL = $0
                         pendingPassword = ""
                         error = nil
                     }

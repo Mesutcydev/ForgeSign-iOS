@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var signer = SigningService()
@@ -72,17 +71,24 @@ struct ContentView: View {
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
-                .fileImporter(isPresented: $showIPAImporter, allowedContentTypes: [.zip, UTType(filenameExtension: "ipa") ?? .zip]) { result in
-                    switch result {
-                    case .success(let url): stageIPA(url)
-                    case .failure: importError = "The IPA could not be selected. Please try again."
+                .sheet(isPresented: $showIPAImporter) {
+                    ForgeDocumentPicker {
+                        showIPAImporter = false
+                        guard ["ipa", "zip"].contains($0.pathExtension.lowercased()) else {
+                            importError = "Choose an IPA or ZIP archive."
+                            return
+                        }
+                        stageIPA($0)
                     }
                 }
-                .fileImporter(isPresented: $showDylibImporter,
-                              allowedContentTypes: [UTType(filenameExtension: "dylib") ?? .data]) { result in
-                    switch result {
-                    case .success(let url): stageDylib(url)
-                    case .failure: importError = "The dylib could not be selected. Please try again."
+                .sheet(isPresented: $showDylibImporter) {
+                    ForgeDocumentPicker {
+                        showDylibImporter = false
+                        guard $0.pathExtension.lowercased() == "dylib" else {
+                            importError = "Choose a .dylib file."
+                            return
+                        }
+                        stageDylib($0)
                     }
                 }
                 .alert("Import failed", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {

@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Picker + manager for remembered provisioning profiles. Shows remaining
 /// validity per profile (often fixed at 365 days) and imports new
@@ -55,10 +54,14 @@ struct ProfilesSheet: View {
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
-                .fileImporter(isPresented: $showImporter,
-                              allowedContentTypes: [UTType(filenameExtension: "mobileprovision") ?? .data]) { result in
-                    if case .success(let url) = result {
-                        importProfile(from: url)
+                .sheet(isPresented: $showImporter) {
+                    ForgeDocumentPicker {
+                        showImporter = false
+                        guard $0.pathExtension.lowercased() == "mobileprovision" else {
+                            error = "Choose a .mobileprovision file."
+                            return
+                        }
+                        importProfile(from: $0)
                     }
                 }
             }
