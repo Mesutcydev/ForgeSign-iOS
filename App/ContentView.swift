@@ -69,7 +69,8 @@ struct ContentView: View {
                 .scrollIndicators(.hidden)
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
-                .toolbar(.hidden, for: .navigationBar)
+                .navigationTitle("Sign")
+                .navigationBarTitleDisplayMode(.inline)
                 .fileImporter(isPresented: $showIPAImporter, allowedContentTypes: [.zip, UTType(filenameExtension: "ipa") ?? .zip]) { result in
                     if case .success(let url) = result { stageIPA(url) }
                 }
@@ -79,9 +80,11 @@ struct ContentView: View {
                 }
                 .sheet(isPresented: $showProfileSheet) {
                     ProfilesSheet()
+                        .environmentObject(profileStore)
                 }
                 .sheet(isPresented: $showCertSheet) {
                     CertificatesSheet()
+                        .environmentObject(certStore)
                 }
                 .sheet(isPresented: $showShare) {
                     if let signedIPA { ShareSheet(items: [signedIPA]) }
@@ -92,7 +95,6 @@ struct ContentView: View {
                     }
                 }
                 .onChange(of: repoStore.pendingIPA) { pending in
-                    // A repo download landed — load it as the input to sign.
                     if let pending {
                         stageIPA(pending, fallbackToSource: true)
                         repoStore.pendingIPA = nil
