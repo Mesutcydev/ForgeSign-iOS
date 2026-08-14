@@ -2,7 +2,7 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign and prepare IPAs on-device; installation uses a loopback server and a trusted remote HTTPS manifest, with no certificate or app-content upload.
 
-**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 1.6](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.6/ForgeSign-1.6.ipa)**
+**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 1.7](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.7/ForgeSign-1.7.ipa)**
 
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
@@ -44,7 +44,7 @@ Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the
 
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-1.6.ipa` from [ForgeSign 1.6](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.6). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
+Grab `ForgeSign-1.7.ipa` from [ForgeSign 1.7](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.7). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
@@ -52,11 +52,16 @@ Grab `ForgeSign-1.6.ipa` from [ForgeSign 1.6](https://github.com/Mesutcydev/Forg
 
 Only sign and install applications you have the rights to modify. Intended for your own builds and development use.
 
-## What’s new in 1.6
+## What’s new in 1.7
+
+- Uses explicit `UIDocumentPickerMode.import` so sideloaded builds request a local copy instead of opening documents in place.
+- Retains concrete `public.data` handling and the explicit IPA, dylib, certificate, and provisioning-profile filename UTIs.
+- 1.6 picker metadata, 1.5 sideloaded picker handling, and 1.4 signing hardening are included.
+
+## What was new in 1.6
 
 - Fixed disabled picker items by using the concrete `public.data` import type instead of abstract `public.item`.
 - Declared IPA, dylib, certificate, and provisioning-profile filename UTIs in `Info.plist` for Files provider compatibility.
-- 1.5 sideloaded picker selection and 1.4 signing, verification, install, and storage hardening are included.
 
 ## What was new in 1.5
 

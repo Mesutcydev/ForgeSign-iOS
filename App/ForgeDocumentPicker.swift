@@ -17,9 +17,22 @@ struct ForgeDocumentPicker: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        // public.data is the concrete catch-all document type. public.item is
-        // abstract and can leave visible provider items disabled on iOS.
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: true)
+        // Use the explicit import mode. The modern opening initializer can
+        // still route through in-place document handling on re-signed apps,
+        // leaving visible provider items disabled. Import mode always requests
+        // a copy and matches the behavior required by this app.
+        let picker = UIDocumentPickerViewController(
+            documentTypes: [
+                UTType.data.identifier,
+                UTType.zip.identifier,
+                UTType.pkcs12.identifier,
+                "com.forgesign.ipa",
+                "com.forgesign.dylib",
+                "com.forgesign.mobileprovision",
+                "com.forgesign.p12"
+            ],
+            in: .import
+        )
         picker.delegate = context.coordinator
         picker.allowsMultipleSelection = false
         return picker
