@@ -23,12 +23,18 @@ jobs:
       - name: Check formatting
         run: git diff --check
 
+      - name: Select available simulator
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available | awk -F '[()]' '/iPhone|iPad/ {print $2; exit}')
+          test -n "$DEVICE_ID"
+          echo "SIMULATOR_UDID=$DEVICE_ID" >> "$GITHUB_ENV"
+
       - name: Run simulator tests
         run: |
           xcodebuild test \
             -project ForgeSignMobile.xcodeproj \
             -scheme ForgeSignMobileTests \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
 
