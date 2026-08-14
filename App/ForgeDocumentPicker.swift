@@ -17,10 +17,9 @@ struct ForgeDocumentPicker: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        // Do not pass UTType(filenameExtension:) here. Providers may expose a
-        // different UTI for the same file, which makes the visible item
-        // non-selectable on a re-signed app.
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
+        // public.data is the concrete catch-all document type. public.item is
+        // abstract and can leave visible provider items disabled on iOS.
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data], asCopy: true)
         picker.delegate = context.coordinator
         picker.allowsMultipleSelection = false
         return picker

@@ -320,7 +320,7 @@
       <a href="#features">Features</a>
       <a href="#screens">Screens</a>
       <a href="#faq">FAQ</a>
-      <a class="nav-cta" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.5/ForgeSign-1.5.ipa">Get v1.5</a>
+      <a class="nav-cta" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.6/ForgeSign-1.6.ipa">Get v1.6</a>
     </div>
   </nav>
 
@@ -328,12 +328,12 @@
     <div class="site-shell">
       <section class="hero" aria-labelledby="hero-title">
         <div>
-          <div class="pill">Version 1.5 · open source</div>
+          <div class="pill">Version 1.6 · open source</div>
           <p class="eyebrow">On-device IPA signer</p>
           <h1 id="hero-title">The calmer way to sign.</h1>
           <p class="hero-copy">ForgeSign brings a focused signing, install, and library workflow to iPhone and iPad. Choose your materials, see what is ready, and keep the pass local.</p>
           <div class="hero-actions">
-            <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.5/ForgeSign-1.5.ipa">Download ForgeSign 1.5 unsigned IPA <span aria-hidden="true">↗</span></a>
+            <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.6/ForgeSign-1.6.ipa">Download ForgeSign 1.6 unsigned IPA <span aria-hidden="true">↗</span></a>
             <a class="button button-secondary" href="https://github.com/Mesutcydev/ForgeSign-iOS">View source</a>
           </div>
           <div class="availability" aria-label="Availability">
@@ -353,7 +353,7 @@
 
       <section class="metrics glass" aria-label="ForgeSign highlights">
         <div class="metric"><strong>On-device</strong><span>Files and signing stay in your workflow.</span></div>
-        <div class="metric"><strong>1.5</strong><span>Reliable Files picker selection on sideloaded builds.</span></div>
+        <div class="metric"><strong>1.6</strong><span>Reliable Files picker selection on sideloaded builds.</span></div>
         <div class="metric"><strong>16+</strong><span>Built for iPhone and iPad.</span></div>
         <div class="metric"><strong>Open</strong><span>Inspect the project on GitHub.</span></div>
       </section>
@@ -361,23 +361,23 @@
       <section class="section" aria-labelledby="release-title">
         <div class="release-panel glass">
           <div>
-            <p class="eyebrow">Latest release · Version 1.5</p>
+            <p class="eyebrow">Latest release · Version 1.6</p>
             <h2 id="release-title">Verified signing, fewer surprises.</h2>
-            <p>ForgeSign 1.5 fixes file selection in sideloaded builds while retaining the verified signing and reliable install workflow.</p>
-            <div class="hero-actions"><a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.5">Read release notes</a></div>
+            <p>ForgeSign 1.6 fixes disabled picker items with concrete data and filename UTIs while retaining the verified signing workflow.</p>
+            <div class="hero-actions"><a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.6">Read release notes</a></div>
           </div>
-          <div class="release-list" aria-label="Version 1.5 changes">
-            <div class="release-item"><b>✓</b><span>IPA, dylib, certificate, and profile files can be selected from Files after sideloading.</span></div>
-            <div class="release-item"><b>✓</b><span>Unknown provider UTIs no longer grey out visible files.</span></div>
+          <div class="release-list" aria-label="Version 1.6 changes">
+            <div class="release-item"><b>✓</b><span>Picker uses concrete public.data import mode so files remain selectable.</span></div>
+            <div class="release-item"><b>✓</b><span>IPA, dylib, certificate, and profile filename UTIs are declared explicitly.</span></div>
             <div class="release-item"><b>✓</b><span>Selected files are copied into the app container before processing.</span></div>
-            <div class="release-item"><b>✓</b><span>1.4 archive safety, verification, install, and storage hardening remains included.</span></div>
+            <div class="release-item"><b>✓</b><span>1.5 sideloaded picker handling and 1.4 hardening remain included.</span></div>
           </div>
         </div>
       </section>
 
       <section class="section" id="screens" aria-labelledby="screens-title">
         <div class="section-head">
-          <div><p class="eyebrow">ForgeSign 1.5 · Dark-mode review</p><h2 id="screens-title">A closer look at the signing workflow.</h2></div>
+          <div><p class="eyebrow">ForgeSign 1.6 · Dark-mode review</p><h2 id="screens-title">A closer look at the signing workflow.</h2></div>
           <p class="section-lede">The app stays glassy and legible in dark mode, with the same information hierarchy across each tab.</p>
         </div>
         <div class="gallery">
@@ -432,7 +432,7 @@
           <div><p class="eyebrow">Questions, answered</p><h2 id="faq-title">Keep the edges clear.</h2></div>
           <div>
             <details open><summary>Is the downloaded IPA signed?</summary><p>No. The release is intentionally unsigned so you can sign it with your own certificate and provisioning profile before installing.</p></details>
-            <details><summary>What does 1.5 improve?</summary><p>ForgeSign 1.5 fixes disabled file selection on sideloaded iOS builds by using an unfiltered import-mode picker and validating file extensions after selection.</p></details>
+            <details><summary>What does 1.6 improve?</summary><p>ForgeSign 1.6 uses concrete public.data import mode and declares filename UTIs so IPA, dylib, certificate, and provisioning-profile files remain selectable after sideloading.</p></details>
             <details><summary>What kind of dylib can be injected?</summary><p>Use a compatible, decrypted Mach-O dylib that matches the target architecture. Injection is performed on a disposable IPA copy before the existing signer; the original input is left untouched.</p></details>
             <details><summary>Does ForgeSign upload my files?</summary><p>The signing workflow is designed to run on-device. You remain responsible for the source IPAs, certificates, profiles, and modifications you choose to use.</p></details>
             <details><summary>Where is the source?</summary><p>ForgeSign is developed in public on <a href="https://github.com/Mesutcydev/ForgeSign-iOS"><u>GitHub</u></a>. Issues and release notes live there too.</p></details>
@@ -442,8 +442,8 @@
 
       <section class="section" aria-label="Download ForgeSign">
         <div class="final-cta glass">
-          <div><h2>Ready for a quieter signing pass?</h2><p>Download ForgeSign 1.5 and bring your own signing materials.</p></div>
-          <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.5/ForgeSign-1.5.ipa">Get ForgeSign 1.5 <span aria-hidden="true">↗</span></a>
+          <div><h2>Ready for a quieter signing pass?</h2><p>Download ForgeSign 1.6 and bring your own signing materials.</p></div>
+          <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.6/ForgeSign-1.6.ipa">Get ForgeSign 1.6 <span aria-hidden="true">↗</span></a>
         </div>
       </section>
 
