@@ -2,7 +2,7 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign and prepare IPAs on-device; installation uses a loopback server and a trusted remote HTTPS manifest, with no certificate or app-content upload.
 
-**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 1.9](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.9/ForgeSign-1.9.ipa)**
+**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 1.10](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.10/ForgeSign-1.10.ipa)**
 
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
@@ -44,7 +44,7 @@ Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the
 
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-1.9.ipa` from [ForgeSign 1.9](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.9). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
+Grab `ForgeSign-1.10.ipa` from [ForgeSign 1.10](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.10). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
@@ -52,18 +52,16 @@ Grab `ForgeSign-1.9.ipa` from [ForgeSign 1.9](https://github.com/Mesutcydev/Forg
 
 Only sign and install applications you have the rights to modify. Intended for your own builds and development use.
 
-## What’s new in 1.9
+## What’s new in 1.10
 
-- Fixes the Files picker that opened but let you select nothing on sideloaded builds. The signer now expands a wildcard `application-identifier` (`TEAMID.*`) to the app's concrete bundle id, so iOS gives the app a real identity it can grant file access to instead of a wildcard one.
-- The fix runs during signing and is applied per bundle node, so it reaches apps you sign with ForgeSign — not only ForgeSign itself. No-op for concrete (non-wildcard) profiles.
-- Fixed certificate and provisioning-profile imports inside their management sheets by using full-screen picker presentation and preserving selected state across dismissal.
-- IPA, certificate, and profile callbacks update app state before dismissing the picker.
-- Includes the v1.7 explicit import mode, v1.6 picker metadata, v1.5 sideloaded handling, and v1.4 signing hardening.
+- Restores v1.1 behavior: extension-bearing IPAs are no longer rejected by the preflight gate before signing.
+- The visible Remove app extensions option remains available, while nested profile matching and final signing validation still fail safely when inputs are incompatible.
+- Includes the v1.9 wildcard app-identity fix and certificate/profile picker state fixes.
 
-## What was new in 1.8
+## What was new in 1.9
 
-- The signer expands wildcard app identities to concrete bundle IDs before embedding code-signature entitlements.
-- The document picker uses a robust import-mode copy and validates extensions after selection.
+- Fixes the Files picker that opened but let you select nothing on sideloaded builds by expanding wildcard application identifiers to concrete bundle IDs.
+- Fixes certificate and provisioning-profile picker state across nested sheet dismissal.
 
 ## What was new in 1.7
 
