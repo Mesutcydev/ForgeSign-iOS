@@ -2,13 +2,16 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// Imports a file into the app's container instead of opening it in place.
+/// Imports a picked file into the app's container (a copy), then each caller
+/// validates the extension in its callback.
 ///
-/// SwiftUI's fileImporter filters by UTI. On sideloaded devices, Files
-/// providers can expose an IPA, dylib, or provisioning profile with a UTI that
-/// does not match a dynamic extension type; the item is shown but disabled.
-/// An unfiltered import-mode picker keeps the item selectable, while each
-/// caller validates its expected extension after the callback.
+/// The type filter here is deliberately maximal (`.item` = every item). The
+/// "picker opens but nothing is selectable" symptom on sideloaded builds is
+/// NOT caused by this filter — even `.item`/`.data` (everything) shows it, and
+/// apps *signed by* ForgeSign hit the same thing without ever using this view.
+/// That points at the entitlements applied via the provisioning profile, not
+/// the picker. Keep this simple; do not reintroduce custom UTI strings or the
+/// deprecated `documentTypes:in:` initializer (they only add fragility).
 struct ForgeDocumentPicker: UIViewControllerRepresentable {
     let onPick: (URL) -> Void
 
@@ -17,22 +20,9 @@ struct ForgeDocumentPicker: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        // Use the explicit import mode. The modern opening initializer can
-        // still route through in-place document handling on re-signed apps,
-        // leaving visible provider items disabled. Import mode always requests
-        // a copy and matches the behavior required by this app.
-        let picker = UIDocumentPickerViewController(
-            documentTypes: [
-                UTType.data.identifier,
-                UTType.zip.identifier,
-                UTType.pkcs12.identifier,
-                "com.forgesign.ipa",
-                "com.forgesign.dylib",
-                "com.forgesign.mobileprovision",
-                "com.forgesign.p12"
-            ],
-            in: .import
-        )
+        // asCopy: true is import mode — the system hands us a copy in our own
+        // container, so no security-scoped access dance is required.
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
         picker.delegate = context.coordinator
         picker.allowsMultipleSelection = false
         return picker
