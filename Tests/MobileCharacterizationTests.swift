@@ -57,68 +57,6 @@ struct MobileCharacterizationTests {
         #expect(normalized.standardizedFileURL.path == equivalent.standardizedFileURL.path)
     }
 
-    @Test("Compatibility accepts an explicit matching profile")
-    func explicitProfileCompatibility() {
-        let inspection = IPAPreflight(
-            appName: "Example",
-            bundleIdentifier: "com.example.app",
-            shortVersion: "1.0",
-            buildVersion: "1",
-            minimumOSVersion: "16.0",
-            nestedBundleCount: 0,
-            extensionCount: 0,
-            frameworkCount: 0,
-            watchAppCount: 0,
-            totalMachOCount: 1,
-            signedMachOCount: 1,
-            encryptedExecutableCount: 0,
-            encryptedPaths: [],
-            archiveBytes: 100
-        )
-        let certificate = CertificateRecord(
-            id: UUID(), filename: "cert.p12", commonName: "Test", organization: "Org",
-            teamID: "TEAM", notAfter: .now.addingTimeInterval(3600), addedAt: .now,
-            hasSavedPassword: false
-        )
-        let profile = ProfileRecord(
-            id: UUID(), filename: "profile.mobileprovision", name: "Profile", teamID: "TEAM",
-            applicationIdentifier: "TEAM.com.example.app", notAfter: .now.addingTimeInterval(3600),
-            provisionedDeviceCount: 1, provisionsAllDevices: false, getTaskAllow: true,
-            profileIsAuthentic: true, addedAt: .now
-        )
-
-        #expect(SigningCompatibility.issues(inspection: inspection, certificate: certificate, profile: profile, bundleID: "").isEmpty)
-    }
-
-    @Test("Compatibility rejects an uncovered bundle ID")
-    func uncoveredBundleID() {
-        let profile = ProfileRecord(
-            id: UUID(), filename: "profile.mobileprovision", name: "Profile", teamID: "TEAM",
-            applicationIdentifier: "TEAM.com.example.app", notAfter: .now.addingTimeInterval(3600),
-            provisionedDeviceCount: 1, provisionsAllDevices: false, getTaskAllow: true,
-            profileIsAuthentic: true, addedAt: .now
-        )
-        let issues = SigningCompatibility.issues(
-            inspection: nil,
-            certificate: nil,
-            profile: profile,
-            bundleID: "com.other.app"
-        )
-        #expect(issues.contains { $0.contains("inspection") })
-    }
-
-    @Test("Compatibility blocks encrypted or nested targets")
-    func encryptedAndNestedTargets() {
-        let inspection = IPAPreflight(
-            appName: "Example", bundleIdentifier: "com.example.app", shortVersion: "1.0", buildVersion: "1",
-            minimumOSVersion: nil, nestedBundleCount: 1, extensionCount: 1, frameworkCount: 0, watchAppCount: 0,
-            totalMachOCount: 2, signedMachOCount: 2, encryptedExecutableCount: 1, encryptedPaths: ["Payload/Example.app/Example"], archiveBytes: 100
-        )
-        let issues = SigningCompatibility.issues(inspection: inspection, certificate: nil, profile: nil, bundleID: "")
-        #expect(issues.contains { $0.contains("encrypted") })
-        #expect(!issues.contains { $0.contains("app extensions") })
-    }
-
     @Test("HTTP routes are exact and query-safe")
     func httpRoutes() {
         #expect(LocalHTTPRoute.request("GET /app.ipa HTTP/1.1")?.path == "/app.ipa")

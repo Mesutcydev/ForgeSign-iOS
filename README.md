@@ -2,7 +2,7 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign and prepare IPAs on-device; installation uses a loopback server and a trusted remote HTTPS manifest, with no certificate or app-content upload.
 
-**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 1.10](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.10/ForgeSign-1.10.ipa)**
+**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 2.0](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.0/ForgeSign-2.0.ipa)**
 
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
@@ -44,7 +44,7 @@ Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the
 
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-1.10.ipa` from [ForgeSign 1.10](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.10). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
+Grab `ForgeSign-2.0.ipa` from [ForgeSign 2.0](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.0). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
@@ -52,7 +52,7 @@ Grab `ForgeSign-1.10.ipa` from [ForgeSign 1.10](https://github.com/Mesutcydev/Fo
 
 Only sign and install applications you have the rights to modify. Intended for your own builds and development use.
 
-## What’s new in 1.10
+## What’s new in 2.0
 
 - Restores v1.1 behavior: extension-bearing IPAs are no longer rejected by the preflight gate before signing.
 - The visible Remove app extensions option remains available, while nested profile matching and final signing validation still fail safely when inputs are incompatible.

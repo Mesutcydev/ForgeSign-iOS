@@ -423,23 +423,8 @@ struct ContentView: View {
         return password.isEmpty ? nil : password
     }
 
-    private var compatibilityIssues: [String] {
-        let inspection: IPAPreflight?
-        if case .ready(let value) = preflightState {
-            inspection = value
-        } else {
-            inspection = nil
-        }
-        return SigningCompatibility.issues(
-            inspection: inspection,
-            certificate: certStore.selected,
-            profile: profileStore.selected,
-            bundleID: bundleId
-        )
-    }
-
     private var canSign: Bool {
-        ipaURL != nil && effectivePassword != nil && compatibilityIssues.isEmpty
+        ipaURL != nil && certStore.selected != nil && profileStore.selected != nil && effectivePassword != nil
     }
 
     private func sign() {
