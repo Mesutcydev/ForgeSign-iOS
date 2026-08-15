@@ -9,7 +9,6 @@ struct CertificatesSheet: View {
     @Environment(\.forgeTheme) private var T
 
     @State private var showImporter = false
-    @State private var pendingURL: URL?
     @State private var pendingPassword = ""
     @State private var rememberPassword = true
     @State private var error: String?
@@ -21,11 +20,11 @@ struct CertificatesSheet: View {
                     VStack(spacing: 0) {
                         header
 
-                        if let pendingURL {
+                        if let pendingURL = store.pendingImportURL {
                             verifyCard(pendingURL)
                         }
 
-                        if store.certificates.isEmpty && pendingURL == nil {
+                        if store.certificates.isEmpty && store.pendingImportURL == nil {
                             emptyState
                         } else if !store.certificates.isEmpty {
                             GlassSection("Saved") {
@@ -52,16 +51,17 @@ struct CertificatesSheet: View {
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
-                .sheet(isPresented: $showImporter) {
+                .fullScreenCover(isPresented: $showImporter) {
                     ForgeDocumentPicker {
-                        showImporter = false
                         guard ["p12", "pfx"].contains($0.pathExtension.lowercased()) else {
                             error = "Choose a .p12 or .pfx certificate."
+                            Task { @MainActor in showImporter = false }
                             return
                         }
-                        pendingURL = $0
+                        store.pendingImportURL = $0
                         pendingPassword = ""
                         error = nil
+                        Task { @MainActor in showImporter = false }
                     }
                 }
             }
@@ -203,7 +203,7 @@ struct CertificatesSheet: View {
 
             HStack(spacing: 10) {
                 GlassSecondaryButton(label: "Cancel") {
-                    pendingURL = nil
+                    store.pendingImportURL = nil
                     pendingPassword = ""
                     error = nil
                 }
@@ -226,7 +226,7 @@ struct CertificatesSheet: View {
         switch store.importCertificate(from: url, password: pendingPassword,
                                        rememberPassword: rememberPassword) {
         case .success:
-            pendingURL = nil
+            store.pendingImportURL = nil
             pendingPassword = ""
             error = nil
         case .failure(let failure):

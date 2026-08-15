@@ -54,14 +54,15 @@ struct ProfilesSheet: View {
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
-                .sheet(isPresented: $showImporter) {
+                .fullScreenCover(isPresented: $showImporter) {
                     ForgeDocumentPicker {
-                        showImporter = false
                         guard $0.pathExtension.lowercased() == "mobileprovision" else {
                             error = "Choose a .mobileprovision file."
+                            Task { @MainActor in showImporter = false }
                             return
                         }
                         importProfile(from: $0)
+                        Task { @MainActor in showImporter = false }
                     }
                 }
             }

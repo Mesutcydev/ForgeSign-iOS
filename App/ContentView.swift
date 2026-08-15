@@ -73,22 +73,24 @@ struct ContentView: View {
                 .toolbar(.hidden, for: .navigationBar)
                 .sheet(isPresented: $showIPAImporter) {
                     ForgeDocumentPicker {
-                        showIPAImporter = false
                         guard ["ipa", "zip"].contains($0.pathExtension.lowercased()) else {
                             importError = "Choose an IPA or ZIP archive."
+                            Task { @MainActor in showIPAImporter = false }
                             return
                         }
                         stageIPA($0)
+                        Task { @MainActor in showIPAImporter = false }
                     }
                 }
                 .sheet(isPresented: $showDylibImporter) {
                     ForgeDocumentPicker {
-                        showDylibImporter = false
                         guard $0.pathExtension.lowercased() == "dylib" else {
                             importError = "Choose a .dylib file."
+                            Task { @MainActor in showDylibImporter = false }
                             return
                         }
                         stageDylib($0)
+                        Task { @MainActor in showDylibImporter = false }
                     }
                 }
                 .alert("Import failed", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {

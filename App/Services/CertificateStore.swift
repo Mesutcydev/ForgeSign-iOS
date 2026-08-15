@@ -20,6 +20,7 @@ struct CertificateRecord: Codable, Identifiable, Equatable {
 final class CertificateStore: ObservableObject {
     @Published private(set) var certificates: [CertificateRecord] = []
     @Published var selectedID: UUID?
+    @Published var pendingImportURL: URL?
 
     private let dir: URL
     private let indexURL: URL
