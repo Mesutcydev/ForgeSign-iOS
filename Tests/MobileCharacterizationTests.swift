@@ -119,6 +119,19 @@ struct MobileCharacterizationTests {
         #expect(issues.contains { $0.contains("extensions") })
     }
 
+    @Test("Compatibility permits removable app extensions")
+    func removableAppExtensions() {
+        let inspection = IPAPreflight(
+            appName: "Example", bundleIdentifier: "com.example.app", shortVersion: "1.0", buildVersion: "1",
+            minimumOSVersion: nil, nestedBundleCount: 1, extensionCount: 1, frameworkCount: 0, watchAppCount: 0,
+            totalMachOCount: 2, signedMachOCount: 2, encryptedExecutableCount: 0, encryptedPaths: [], archiveBytes: 100
+        )
+        let issues = SigningCompatibility.issues(
+            inspection: inspection, certificate: nil, profile: nil, bundleID: "", removeExtensions: true
+        )
+        #expect(!issues.contains { $0.contains("app extensions") })
+    }
+
     @Test("HTTP routes are exact and query-safe")
     func httpRoutes() {
         #expect(LocalHTTPRoute.request("GET /app.ipa HTTP/1.1")?.path == "/app.ipa")

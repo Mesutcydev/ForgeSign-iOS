@@ -434,7 +434,8 @@ struct ContentView: View {
             inspection: inspection,
             certificate: certStore.selected,
             profile: profileStore.selected,
-            bundleID: bundleId
+            bundleID: bundleId,
+            removeExtensions: removeExtensions
         )
     }
 

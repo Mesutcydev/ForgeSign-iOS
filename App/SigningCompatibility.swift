@@ -1,7 +1,7 @@
 import Foundation
 
 struct SigningCompatibility {
-    static func issues(inspection: IPAPreflight?, certificate: CertificateRecord?, profile: ProfileRecord?, bundleID: String, now: Date = .now) -> [String] {
+    static func issues(inspection: IPAPreflight?, certificate: CertificateRecord?, profile: ProfileRecord?, bundleID: String, removeExtensions: Bool = false, now: Date = .now) -> [String] {
         var issues: [String] = []
 
         guard let inspection else {
@@ -11,8 +11,11 @@ struct SigningCompatibility {
         if inspection.encryptedExecutableCount > 0 {
             issues.append("The IPA contains encrypted executable files and cannot be signed.")
         }
-        if inspection.extensionCount > 0 || inspection.watchAppCount > 0 {
-            issues.append("Apps with extensions or Watch targets require a matching profile for each target.")
+        if inspection.extensionCount > 0 && !removeExtensions {
+            issues.append("This IPA contains app extensions. Enable Remove app extensions or choose matching profiles for every target.")
+        }
+        if inspection.watchAppCount > 0 {
+            issues.append("Apps with Watch targets require a matching profile for each target.")
         }
         guard let certificate else {
             issues.append("Choose a signing certificate.")
