@@ -136,7 +136,10 @@ struct ContentView: View {
                 .font(T.display(30))
                 .foregroundColor(T.ink)
 
-            MonoText(text: "ON-DEVICE IPA SIGNER", size: 10, weight: .semibold, color: T.ink3)
+            VStack(spacing: 3) {
+                MonoText(text: "ON-DEVICE IPA SIGNER", size: 10, weight: .semibold, color: T.ink3)
+                MonoText(text: "by Mesutcydev", size: 9, color: T.ink4)
+            }
         }
         .padding(.top, 32)
         .padding(.bottom, 8)
