@@ -3,6 +3,65 @@
 #include "archo.h"
 #include "signing.h"
 
+// ForgeSign: expand a wildcard application-identifier ("<PREFIX>.*") to the
+// concrete bundle id before it is baked into the code signature. A literal
+// wildcard identity installs fine but leaves the app without a concrete
+// identity, which breaks identity-scoped system services — most visibly the
+// Files document picker, whose items become unselectable because the system
+// cannot issue a file-access grant to a "*" identity. This is the same
+// expansion Xcode performs when signing against a wildcard profile; zsign
+// otherwise embeds the profile's entitlements verbatim. Applied per bundle
+// node, so each app/extension gets an application-identifier matching its own
+// bundle id. No-op for concrete (non-wildcard) profiles.
+static string FSExpandWildcardAppId(const string& strEntitleData,
+	const string& strBundleId,
+	const string& strTeamId)
+{
+	if (strEntitleData.empty() || strBundleId.empty()) {
+		return strEntitleData;
+	}
+
+	jvalue jvEntitlements;
+	if (!jvEntitlements.read_plist(strEntitleData)) {
+		return strEntitleData;
+	}
+
+	bool bChanged = false;
+	const char* arrIdKeys[] = { "application-identifier", "com.apple.application-identifier" };
+	for (const char* szKey : arrIdKeys) {
+		if (!jvEntitlements.has(szKey) || !jvEntitlements[szKey].is_string()) {
+			continue;
+		}
+		string strValue = jvEntitlements[szKey].as_string();
+		string strConcrete = strValue;
+		if (strValue == "*") {
+			if (!strTeamId.empty()) {
+				strConcrete = strTeamId + "." + strBundleId;
+			}
+		} else if (strValue.size() >= 2 && strValue.compare(strValue.size() - 2, 2, ".*") == 0) {
+			// Keep the existing "<prefix>." (team id or a legacy app-id prefix)
+			// and swap only the trailing "*" for the concrete bundle id.
+			strConcrete = strValue.substr(0, strValue.size() - 1) + strBundleId;
+		}
+		if (strConcrete != strValue) {
+			jvEntitlements[szKey] = strConcrete;
+			bChanged = true;
+		}
+	}
+
+	if (!bChanged) {
+		return strEntitleData;
+	}
+
+	string strExpanded;
+	jvEntitlements.style_write_plist(strExpanded);
+	if (strExpanded.empty()) {
+		return strEntitleData;
+	}
+	ZLog::Print(">>> Expanded wildcard application-identifier to concrete bundle id (Files picker fix)\n");
+	return strExpanded;
+}
+
 uint64_t ZArchO::s_uExecSegLimit = 0;
 
 ZArchO::ZArchO()
@@ -338,9 +397,15 @@ bool ZArchO::BuildCodeSignature(ZSignAsset* pSignAsset,
 	string strDerEntitlementsSlot;
 
 	string strEmptyEntitlements = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict/>\n</plist>\n";
+	// Expand a wildcard application-identifier to this node's concrete bundle id
+	// so the signed app carries a real identity (the Files picker cannot grant
+	// file access to a "*" identity). No-op for concrete profiles.
+	string strEntitlements = IsExecute()
+		? FSExpandWildcardAppId(pSignAsset->m_strEntitleData, strBundleId, pSignAsset->m_strTeamId)
+		: strEmptyEntitlements;
 	ZSign::SlotBuildRequirements(strBundleId, pSignAsset->m_strSubjectCN, strRequirementsSlot);
-	ZSign::SlotBuildEntitlements(IsExecute() ? pSignAsset->m_strEntitleData : strEmptyEntitlements, strEntitlementsSlot);
-	ZSign::SlotBuildDerEntitlements(IsExecute() ? pSignAsset->m_strEntitleData : "", strDerEntitlementsSlot);
+	ZSign::SlotBuildEntitlements(strEntitlements, strEntitlementsSlot);
+	ZSign::SlotBuildDerEntitlements(IsExecute() ? strEntitlements : "", strDerEntitlementsSlot);
 
 	string strRequirementsSlotSHA1;
 	string strRequirementsSlotSHA256;

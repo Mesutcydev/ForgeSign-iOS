@@ -2,7 +2,7 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign and prepare IPAs on-device; installation uses a loopback server and a trusted remote HTTPS manifest, with no certificate or app-content upload.
 
-**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 1.7](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.7/ForgeSign-1.7.ipa)**
+**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 1.8](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v1.8/ForgeSign-1.8.ipa)**
 
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
@@ -44,7 +44,7 @@ Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the
 
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-1.7.ipa` from [ForgeSign 1.7](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.7). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
+Grab `ForgeSign-1.8.ipa` from [ForgeSign 1.8](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v1.8). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
@@ -52,7 +52,13 @@ Grab `ForgeSign-1.7.ipa` from [ForgeSign 1.7](https://github.com/Mesutcydev/Forg
 
 Only sign and install applications you have the rights to modify. Intended for your own builds and development use.
 
-## What’s new in 1.7
+## What’s new in 1.8
+
+- Fixes the Files picker that opened but let you select nothing on sideloaded builds. The signer now expands a wildcard `application-identifier` (`TEAMID.*`) to the app's concrete bundle id, so iOS gives the app a real identity it can grant file access to instead of a wildcard one.
+- The fix runs during signing and is applied per bundle node, so it reaches apps you sign with ForgeSign — not only ForgeSign itself. No-op for concrete (non-wildcard) profiles.
+- Document picker simplified to a robust import-mode copy; the deprecated `documentTypes:in:` initializer and custom UTI filter were removed.
+
+## What was new in 1.7
 
 - Uses explicit `UIDocumentPickerMode.import` so sideloaded builds request a local copy instead of opening documents in place.
 - Retains concrete `public.data` handling and the explicit IPA, dylib, certificate, and provisioning-profile filename UTIs.
