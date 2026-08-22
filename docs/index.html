@@ -320,7 +320,7 @@
       <a href="#features">Features</a>
       <a href="#screens">Screens</a>
       <a href="#faq">FAQ</a>
-      <a class="nav-cta" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.0/ForgeSign-2.0.ipa">Get v2.0</a>
+      <a class="nav-cta" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.1/ForgeSign-2.1.ipa">Get v2.1</a>
     </div>
   </nav>
 
@@ -328,12 +328,12 @@
     <div class="site-shell">
       <section class="hero" aria-labelledby="hero-title">
         <div>
-          <div class="pill">Version 2.0 · open source</div>
+          <div class="pill">Version 2.1 · open source</div>
           <p class="eyebrow">On-device IPA signer</p>
           <h1 id="hero-title">The calmer way to sign.</h1>
           <p class="hero-copy">ForgeSign brings a focused signing, install, and library workflow to iPhone and iPad. Choose your materials, see what is ready, and keep the pass local.</p>
           <div class="hero-actions">
-            <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.0/ForgeSign-2.0.ipa">Download ForgeSign 2.0 unsigned IPA <span aria-hidden="true">↗</span></a>
+            <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.1/ForgeSign-2.1.ipa">Download ForgeSign 2.1 unsigned IPA <span aria-hidden="true">↗</span></a>
             <a class="button button-secondary" href="https://github.com/Mesutcydev/ForgeSign-iOS">View source</a>
           </div>
           <div class="availability" aria-label="Availability">
@@ -353,7 +353,7 @@
 
       <section class="metrics glass" aria-label="ForgeSign highlights">
         <div class="metric"><strong>On-device</strong><span>Files and signing stay in your workflow.</span></div>
-        <div class="metric"><strong>2.0</strong><span>Signing keeps the v1.1 extension workflow.</span></div>
+        <div class="metric"><strong>2.1</strong><span>Open IPA previews directly in ForgeSign.</span></div>
         <div class="metric"><strong>16+</strong><span>Built for iPhone and iPad.</span></div>
         <div class="metric"><strong>Open</strong><span>Inspect the project on GitHub.</span></div>
       </section>
@@ -361,23 +361,23 @@
       <section class="section" aria-labelledby="release-title">
         <div class="release-panel glass">
           <div>
-            <p class="eyebrow">Latest release · Version 2.0</p>
-            <h2 id="release-title">Verified signing, fewer surprises.</h2>
-            <p>ForgeSign 2.0 restores the v1.1 extension signing workflow while retaining the sideloaded Files picker fixes.</p>
-            <div class="hero-actions"><a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.0">Read release notes</a></div>
+            <p class="eyebrow">Latest release · Version 2.1</p>
+            <h2 id="release-title">From Files to signing in one tap.</h2>
+            <p>ForgeSign 2.1 adds a dedicated quick action to IPA previews in Files and hands the selected archive directly into the signing workflow.</p>
+            <div class="hero-actions"><a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.1">Read release notes</a></div>
           </div>
-          <div class="release-list" aria-label="Version 2.0 changes">
-            <div class="release-item"><b>✓</b><span>Extension-bearing IPAs no longer grey out Sign IPA before signing.</span></div>
-            <div class="release-item"><b>✓</b><span>Remove app extensions remains optional, matching the v1.1 workflow.</span></div>
-            <div class="release-item"><b>✓</b><span>Nested profile matching and final signing validation remain fail-closed.</span></div>
-            <div class="release-item"><b>✓</b><span>v1.9 wildcard identity and Files picker fixes remain included.</span></div>
+          <div class="release-list" aria-label="Version 2.1 changes">
+            <div class="release-item"><b>✓</b><span>IPA previews in Files now show ForgeSign in the bottom quick-action menu.</span></div>
+            <div class="release-item"><b>✓</b><span>Tapping ForgeSign opens the app with the selected IPA already loaded.</span></div>
+            <div class="release-item"><b>✓</b><span>IPA registration uses Apple’s canonical file type for reliable handoff.</span></div>
+            <div class="release-item"><b>✓</b><span>Ordinary ZIP archives remain a separate alternate import path.</span></div>
           </div>
         </div>
       </section>
 
       <section class="section" id="screens" aria-labelledby="screens-title">
         <div class="section-head">
-          <div><p class="eyebrow">ForgeSign 2.0 · Dark-mode review</p><h2 id="screens-title">A closer look at the signing workflow.</h2></div>
+          <div><p class="eyebrow">ForgeSign 2.1 · Dark-mode review</p><h2 id="screens-title">A closer look at the signing workflow.</h2></div>
           <p class="section-lede">The app stays glassy and legible in dark mode, with the same information hierarchy across each tab.</p>
         </div>
         <div class="gallery">
@@ -432,7 +432,7 @@
           <div><p class="eyebrow">Questions, answered</p><h2 id="faq-title">Keep the edges clear.</h2></div>
           <div>
             <details open><summary>Is the downloaded IPA signed?</summary><p>No. The release is intentionally unsigned so you can sign it with your own certificate and provisioning profile before installing.</p></details>
-            <details><summary>What does 2.0 improve?</summary><p>ForgeSign 2.0 restores the v1.1 behavior where extension-bearing IPAs can reach the signer without first enabling Remove app extensions.</p></details>
+            <details><summary>What does 2.1 add?</summary><p>ForgeSign 2.1 adds an Open in ForgeSign quick action to IPA previews in Files, then loads the selected archive directly into the signing workflow.</p></details>
             <details><summary>What kind of dylib can be injected?</summary><p>Use a compatible, decrypted Mach-O dylib that matches the target architecture. Injection is performed on a disposable IPA copy before the existing signer; the original input is left untouched.</p></details>
             <details><summary>Does ForgeSign upload my files?</summary><p>The signing workflow is designed to run on-device. You remain responsible for the source IPAs, certificates, profiles, and modifications you choose to use.</p></details>
             <details><summary>Where is the source?</summary><p>ForgeSign is developed in public on <a href="https://github.com/Mesutcydev/ForgeSign-iOS"><u>GitHub</u></a>. Issues and release notes live there too.</p></details>
@@ -442,8 +442,8 @@
 
       <section class="section" aria-label="Download ForgeSign">
         <div class="final-cta glass">
-          <div><h2>Ready for a quieter signing pass?</h2><p>Download ForgeSign 2.0 and bring your own signing materials.</p></div>
-          <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.0/ForgeSign-2.0.ipa">Get ForgeSign 2.0 <span aria-hidden="true">↗</span></a>
+          <div><h2>Ready for a quieter signing pass?</h2><p>Download ForgeSign 2.1 and bring your own signing materials.</p></div>
+          <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.1/ForgeSign-2.1.ipa">Get ForgeSign 2.1 <span aria-hidden="true">↗</span></a>
         </div>
       </section>
 

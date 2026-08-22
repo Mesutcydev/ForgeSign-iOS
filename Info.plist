@@ -18,6 +18,17 @@
 			<key>LSItemContentTypes</key>
 			<array>
 				<string>com.apple.itunes.ipa</string>
+			</array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>ZIP Archive</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Alternate</string>
+			<key>LSItemContentTypes</key>
+			<array>
 				<string>public.zip-archive</string>
 			</array>
 		</dict>
@@ -30,13 +41,15 @@
 				<string>public.data</string>
 			</array>
 			<key>UTTypeDescription</key>
-			<string>ForgeSign IPA archive</string>
+			<string>iOS App Archive</string>
 			<key>UTTypeIdentifier</key>
-			<string>com.forgesign.ipa</string>
+			<string>com.apple.itunes.ipa</string>
 			<key>UTTypeTagSpecification</key>
 			<dict>
 				<key>public.filename-extension</key>
 				<string>ipa</string>
+				<key>public.mime-type</key>
+				<string>application/x-ios-app</string>
 			</dict>
 		</dict>
 		<dict>
@@ -99,9 +112,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.0</string>
+	<string>2.1</string>
 	<key>CFBundleVersion</key>
-	<string>12</string>
+	<string>13</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>itms-services</string>

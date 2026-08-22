@@ -4,6 +4,31 @@ import Testing
 
 @Suite("Mobile characterization")
 struct MobileCharacterizationTests {
+    @Test("IPA files expose ForgeSign from the Files preview")
+    func ipaFilesQuickActionRegistration() throws {
+        let documentTypes = try #require(
+            Bundle.main.object(forInfoDictionaryKey: "CFBundleDocumentTypes") as? [[String: Any]]
+        )
+        let ipaDocumentType = try #require(documentTypes.first { documentType in
+            let contentTypes = documentType["LSItemContentTypes"] as? [String]
+            return contentTypes?.contains("com.apple.itunes.ipa") == true
+        })
+
+        #expect(ipaDocumentType["CFBundleTypeRole"] as? String == "Viewer")
+        #expect(ipaDocumentType["LSHandlerRank"] as? String == "Alternate")
+
+        let importedTypes = try #require(
+            Bundle.main.object(forInfoDictionaryKey: "UTImportedTypeDeclarations") as? [[String: Any]]
+        )
+        let importedIPAType = try #require(importedTypes.first { importedType in
+            importedType["UTTypeIdentifier"] as? String == "com.apple.itunes.ipa"
+        })
+        let tags = try #require(importedIPAType["UTTypeTagSpecification"] as? [String: Any])
+
+        #expect(tags["public.filename-extension"] as? String == "ipa")
+        #expect(tags["public.mime-type"] as? String == "application/x-ios-app")
+    }
+
     @Test("Flat repository entries preserve the first download")
     func flatRepositoryEntry() throws {
         let data = Data(#"{"name":"Test","apps":[{"name":"Example","bundleIdentifier":"com.example.app","version":"1.0","downloadURL":"https://example.com/app.ipa","size":1234}]}"#.utf8)
