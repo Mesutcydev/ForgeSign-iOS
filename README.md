@@ -2,7 +2,7 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign and prepare IPAs on-device; installation uses a loopback server and a trusted remote HTTPS manifest, with no certificate or app-content upload.
 
-**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 2.1](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.1/ForgeSign-2.1.ipa)**
+**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 2.4](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.4/ForgeSign-2.4.ipa)**
 
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
@@ -23,6 +23,8 @@ ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ e
 - **Install on device** — semi-local OTA install: the IPA is served over loopback HTTP while a trusted remote HTTPS plist (`api.palera.in`) drives `itms-services` directly (Safari is a fallback only). The external manifest service receives install metadata and the local package URL.
 - **Library** — a persistent history of every signed app with status (signed / installing / delivered / installed / missing), plus reinstall, share and delete actions.
 - **IPA preflight** — package, bundle, encryption and architecture signals are shown before a signing run.
+- **Per-bundle provisioning audit** — the app and every extension show their resolved bundle ID and matching-profile status before signing; only the profiles needed by that IPA are passed to the signer.
+- **Optional Apple Account provisioning** — ForgeSign can create matching profiles for the app, extensions, and File Provider / attachment bundles. It tries this iPhone’s AuthKit anisette first, then AltServer, then an optional anisette HTTP server (needed on macOS 27 when AltServer cannot read `machineID`). Manual imported-profile signing remains available.
 - **Sources** — save repository feeds and hand selected IPA downloads into the normal signing flow.
 - **Optional dylib injection** — inject a compatible decrypted dylib into the app, with an opt-in app-extension path, before signing. The original IPA is left untouched.
 - **Glass design language** — lighter translucent cards, ambient color blooms, Liquid Glass on iOS 26+ with a material fallback back to iOS 16, light and dark themes.
@@ -32,6 +34,7 @@ ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ e
 - Xcode 26+ (the build needs the iOS 26 SDK for the Liquid Glass APIs; deployment target is iOS 16)
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
 - iOS 16.0+ on device
+- Optional: AltServer on the same local network, or an anisette server (`http://YOUR-MAC-IP:6969`) when using Apple Account provisioning on macOS 27
 
 ## Build from source
 
@@ -42,15 +45,63 @@ open ForgeSignMobile.xcodeproj
 
 Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the project settings by design — sign the produced app with your own certificate and profile (ForgeSign desktop can do it, or any sideloading tool).
 
+The device target pins the last AltSign Swift Package revision whose Apple Account authentication path remains enabled. Its scheme pre-action repairs a stale OpenSSL folder reference in that upstream package before compilation.
+
+Package a device build with the checked packaging script (the output must not already exist):
+
+```bash
+python3 scripts/package_ipa.py pack /path/to/Release-iphoneos/ForgeSign.app ForgeSign.ipa
+python3 scripts/package_ipa.py validate ForgeSign.ipa
+```
+
+This excludes Finder metadata and AppleDouble resource forks (`._*`, including misleading `Payload/._ForgeSign.app` entries), preserves executable permissions, and validates the single-app Payload. For an existing IPA, use `repack INPUT.ipa OUTPUT.ipa`; all retained app contents are verified byte-for-byte. Packaging validation does not test Apple authentication or prove installation on a device.
+
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-2.1.ipa` from [ForgeSign 2.1](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.1). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
+Grab `ForgeSign-2.4.ipa` from [ForgeSign 2.4](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.4). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
 3. Install the signed IPA on your device.
 
 Only sign and install applications you have the rights to modify. Intended for your own builds and development use.
+
+## Apple Account provisioning
+
+Turn on **Use Apple Account with AltServer**, enter the Apple Account credentials and device UDID, and keep at least one anisette source available. When ForgeSign itself is installed by AltStore, its `ALTDeviceID` placeholder is populated automatically. The password is held only for the current run and is sent to Apple by AltSign.
+
+On iOS/macOS 27, AltServer’s built-in anisette often fails with a missing `machineID`. ForgeSign then uses this iPhone, or an anisette server you run locally:
+
+```bash
+docker run -d --restart always --name anisette-v3 -p 6969:6969 dadoum/anisette-v3-server
+```
+
+Enter `http://YOUR-MAC-LAN-IP:6969` in **Anisette URL**. If AltServer is discovered, ForgeSign also tries port 6969 on that Mac automatically.
+
+If Apple Account provisioning cannot finish, signing continues with the imported certificate and profile. Extensions and attachment / File Provider bundles then use the app profile.
+
+ForgeSign reuses a matching imported or previously generated certificate. It deliberately refuses to revoke an unknown existing certificate, because doing so could invalidate AltStore and other installed apps. On a free account already occupied by AltStore, use a separate Apple Account or import the exact matching P12. Normal free-account App ID, active-app and seven-day expiry limits still apply.
+
+## What’s new in 2.4
+
+- Restores signing when an IPA has extensions or attachment bundles but only the app profile is imported.
+- Works around the macOS 27 AltServer `machineID` anisette failure by using this iPhone first, then AltServer, then an optional anisette HTTP server.
+- Keeps Apple Account provisioning for per-extension and App Group profiles when anisette is available, and falls back to the imported profile when it is not.
+
+## What’s new in 2.3
+
+- Replaces the proposed custom Mac companion with direct discovery and communication with an existing AltServer.
+- Adds on-device AltSign authentication, two-factor verification, device registration, safe certificate handling, extension App IDs, shared App Groups and per-bundle profile downloads.
+- Preserves manual certificate/profile signing and refuses to revoke an inaccessible AltStore certificate.
+- Includes the stable signing header and Home Screen install handoff fixes from 2.2.
+
+## What’s new in 2.2
+
+- Adds a pre-sign profile check for the root app and every extension, with specific bundle ID, team, certificate, device, expiry, and App Group errors.
+- Uses only the matching profiles, signs nested bundles before the root app, preserves original identifiers in `ALTBundleID`, and records each resolved profile’s groups in `ALTAppGroups`.
+- Adds per-bundle automatic-provisioning hooks; direct AltServer support is completed in 2.3.
+- Verifies the final IPA’s signatures, embedded profiles, resolved application identifiers, and `ALTAppGroups` metadata before saving it.
+- Keeps the ForgeSign header stable while signing and returns to the Home Screen after handing the install request to iOS.
 
 ## What’s new in 2.1
 
@@ -136,3 +187,4 @@ project.yml     XcodeGen manifest (regenerates the .xcodeproj)
 
 - [zsign](https://github.com/zhlynn/zsign) — signing engine (vendored)
 - [OpenSSL](https://www.openssl.org) — static cryptography libraries (vendored)
+- [AltSign](https://github.com/rileytestut/AltSign) — Apple-account and provisioning API integration (Swift Package, pinned revision)

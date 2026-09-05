@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var signer = SigningService()
+    @StateObject private var altServer = AltServerClient()
+    @StateObject private var altProvisioner = AltServerProvisioningService()
 
     @EnvironmentObject private var certStore: CertificateStore
     @EnvironmentObject private var profileStore: ProfileStore
@@ -19,6 +21,7 @@ struct ContentView: View {
     @State private var dylibURL: URL?
     @State private var injectIntoExtensions = false
     @State private var preflightState: IPAPreflightState = .idle
+    @State private var provisioningAudit: ProvisioningAudit?
     @State private var signedIPA: URL?
     @State private var signedBundleId = ""
     @State private var signedVersion = "1.1"
@@ -29,6 +32,12 @@ struct ContentView: View {
     @State private var showDylibImporter = false
     @State private var showShare = false
     @State private var importError: String?
+    @State private var provisioningWarning: String?
+    @AppStorage("automaticProvisioningEnabled") private var automaticProvisioningEnabled = false
+    @AppStorage("altServerAppleID") private var altServerAppleID = ""
+    @AppStorage("altServerDeviceIdentifier") private var altServerDeviceIdentifier = ProvisioningAuditService.currentDeviceIdentifier ?? ""
+    @AppStorage("anisetteServerURL") private var anisetteServerURL = ""
+    @State private var altServerApplePassword = ""
 
     var body: some View {
         NavigationStack {
@@ -41,9 +50,19 @@ struct ContentView: View {
                         if ipaURL != nil {
                             IPAPreflightCard(state: preflightState,
                                              certificate: certStore.selected,
-                                             profile: profileStore.selected)
+                                             profile: profileStore.selected,
+                                             audit: provisioningAudit)
                         }
                         optionsSection
+                        AutomaticProvisioningSection(
+                            isEnabled: $automaticProvisioningEnabled,
+                            appleID: $altServerAppleID,
+                            applePassword: $altServerApplePassword,
+                            deviceIdentifier: $altServerDeviceIdentifier,
+                            anisetteServerURL: $anisetteServerURL,
+                            altServer: altServer,
+                            provisioner: altProvisioner
+                        )
                         DylibInjectionSection(dylibURL: $dylibURL,
                                               injectIntoExtensions: $injectIntoExtensions,
                                               chooseDylib: { showDylibImporter = true },
@@ -53,18 +72,18 @@ struct ContentView: View {
                                               })
                         signButton
 
+                        if let provisioningWarning, signer.phase != .provisioning {
+                            warningCard(provisioningWarning)
+                        }
+
                         if case .failed(let message) = signer.phase {
                             errorCard(message)
-                                .transition(.opacity)
                         }
 
                         if let signedIPA {
                             resultSection(signedIPA)
-                                .transition(.opacity.combined(with: .move(edge: .bottom)))
                         }
                     }
-                    .animation(AppAnimation.state, value: signer.phase == .signing)
-                    .animation(AppAnimation.state, value: signedIPA != nil)
                     .padding(.bottom, 40)
                 }
                 .scrollIndicators(.hidden)
@@ -98,6 +117,14 @@ struct ContentView: View {
                 } message: {
                     Text(importError ?? "")
                 }
+                .alert("Two-Factor Authentication", isPresented: $altProvisioner.isRequestingVerificationCode) {
+                    TextField("Six-digit code", text: $altProvisioner.verificationCode)
+                        .keyboardType(.numberPad)
+                    Button("Cancel", role: .cancel) { altProvisioner.cancelVerification() }
+                    Button("Continue") { altProvisioner.submitVerificationCode() }
+                } message: {
+                    Text("Enter the verification code Apple sent to your trusted device.")
+                }
                 .sheet(isPresented: $showProfileSheet) {
                     ProfilesSheet()
                 }
@@ -122,6 +149,13 @@ struct ContentView: View {
                     case .unsupported: break
                     }
                 }
+                .onChange(of: profileStore.profiles) { _ in refreshProvisioningAudit() }
+                .onChange(of: profileStore.selectedID) { _ in refreshProvisioningAudit() }
+                .onChange(of: certStore.selectedID) { _ in refreshProvisioningAudit() }
+                .onChange(of: bundleId) { _ in refreshProvisioningAudit() }
+                .onChange(of: removeExtensions) { _ in refreshProvisioningAudit() }
+                .onChange(of: automaticProvisioningEnabled) { _ in refreshProvisioningAudit() }
+                .onChange(of: altServerDeviceIdentifier) { _ in refreshProvisioningAudit() }
             }
         }
     }
@@ -258,12 +292,17 @@ struct ContentView: View {
 
     private var signButton: some View {
         let signing = signer.phase == .signing
-        return Button(action: sign) {
+        let provisioning = signer.phase == .provisioning
+        let busy = signing || provisioning
+        return Button {
+            sign()
+        } label: {
             HStack(spacing: 8) {
-                if signing {
+                if busy {
                     ProgressView()
                         .tint(.white)
-                    Text("Signing…").font(T.sans(15, .semibold))
+                    Text(provisioning ? "Provisioning…" : "Signing…")
+                        .font(T.sans(15, .semibold))
                 } else {
                     Image(systemName: "signature")
                         .font(.system(size: 14, weight: .semibold))
@@ -280,15 +319,42 @@ struct ContentView: View {
                     .stroke(T.rule2, lineWidth: AppStroke.hairline)
             }
             .shimmer(isActive: signing)
-            .opacity(!canSign || signing ? 0.45 : 1)
+            .opacity(!canSign || busy ? 0.45 : 1)
         }
         .buttonStyle(GlassTactileButtonStyle())
-        .disabled(!canSign || signing)
+        .disabled(!canSign || busy)
         .padding(.horizontal, T.pad)
         .padding(.top, 28)
     }
 
     // MARK: - Error
+
+    private func warningCard(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Rectangle()
+                .fill(T.warn)
+                .frame(width: 2)
+                .frame(maxHeight: .infinity)
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundColor(T.warn)
+                .padding(.top, 1)
+            Text(message)
+                .font(T.mono(11))
+                .foregroundColor(T.ink2)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .fGlass(cornerRadius: 14)
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(T.warn.opacity(0.35), lineWidth: AppStroke.hairline)
+        }
+        .padding(.horizontal, T.pad)
+        .padding(.top, 24)
+    }
 
     private func errorCard(_ message: String) -> some View {
         HStack(alignment: .top, spacing: 10) {
@@ -391,6 +457,7 @@ struct ContentView: View {
         }
 
         ipaURL = localURL
+        provisioningAudit = nil
         signer.pruneStagedArchives(keeping: localURL)
         guard FileManager.default.fileExists(atPath: localURL.path) else {
             ipaURL = nil
@@ -408,8 +475,10 @@ struct ContentView: View {
                 switch result {
                 case .success(let inspection):
                     preflightState = .ready(inspection)
+                    refreshProvisioningAudit(inspection)
                 case .failure(let error):
                     preflightState = .failed(error.localizedDescription)
+                    provisioningAudit = nil
                 }
             }
         }
@@ -426,21 +495,129 @@ struct ContentView: View {
         return password.isEmpty ? nil : password
     }
 
-    private var canSign: Bool {
-        ipaURL != nil && certStore.selected != nil && profileStore.selected != nil && effectivePassword != nil
+    private var isAppleAccountReady: Bool {
+        !altServerAppleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !altServerApplePassword.isEmpty
+            && !altServerDeviceIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (altServer.hasAnisetteSource || parsedAnisetteServerURL != nil)
     }
 
-    private func sign() {
-        guard let ipa = ipaURL,
-              let cert = certStore.selected,
+    private var canSign: Bool {
+        guard ipaURL != nil else { return false }
+        guard automaticProvisioningEnabled else { return canSignManually }
+        let inspectionReady: Bool
+        if case .ready = preflightState { inspectionReady = true } else { inspectionReady = false }
+        return canSignManually || (isAppleAccountReady && inspectionReady)
+    }
+
+    private func refreshProvisioningAudit(_ inspection: IPAPreflight? = nil) {
+        let resolvedInspection: IPAPreflight
+        if let inspection {
+            resolvedInspection = inspection
+        } else if case .ready(let ready) = preflightState {
+            resolvedInspection = ready
+        } else {
+            provisioningAudit = nil
+            return
+        }
+        provisioningAudit = ProvisioningAuditService.makeAudit(
+            inspection: resolvedInspection,
+            profiles: profileStore.profiles,
+            preferredProfileID: profileStore.selectedID,
+            certificate: certStore.selected,
+            requestedBundleID: bundleId,
+            removeExtensions: removeExtensions,
+            deviceIdentifier: automaticProvisioningEnabled
+                ? altServerDeviceIdentifier
+                : ProvisioningAuditService.currentDeviceIdentifier,
+            strictNestedBundles: automaticProvisioningEnabled && isAppleAccountReady
+        )
+    }
+
+    private var parsedAnisetteServerURL: URL? {
+        let trimmed = anisetteServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              ["http", "https"].contains(scheme),
+              url.host != nil else { return nil }
+        return url
+    }
+
+    private var canSignManually: Bool {
+        certStore.selected != nil && profileStore.selected != nil && effectivePassword != nil
+    }
+
+    private func sign(allowAutomaticProvisioning: Bool = true) {
+        guard let ipa = ipaURL else { return }
+
+        if automaticProvisioningEnabled,
+           allowAutomaticProvisioning,
+           case .ready(let inspection) = preflightState {
+            let audit = ProvisioningAuditService.makeAudit(
+                inspection: inspection,
+                profiles: profileStore.profiles,
+                preferredProfileID: profileStore.selectedID,
+                certificate: certStore.selected,
+                requestedBundleID: bundleId,
+                removeExtensions: removeExtensions,
+                deviceIdentifier: altServerDeviceIdentifier,
+                strictNestedBundles: true
+            )
+            provisioningAudit = audit
+            if (audit.firstBlockingMessage != nil || !canSignManually) && isAppleAccountReady {
+                obtainMissingProfiles(inspection: inspection,
+                                      audit: audit,
+                                      certificate: certStore.selected)
+                return
+            }
+        }
+
+        guard let cert = certStore.selected,
               let pw = effectivePassword,
               let profile = profileStore.selected else { return }
         let p12 = certStore.fileURL(for: cert)
-        let profileFiles = [profile] + profileStore.profiles.filter { $0.id != profile.id && $0.profileIsAuthentic }
+        let audit: ProvisioningAudit?
+        if case .ready(let inspection) = preflightState {
+            audit = ProvisioningAuditService.makeAudit(
+                inspection: inspection,
+                profiles: profileStore.profiles,
+                preferredProfileID: profile.id,
+                certificate: cert,
+                requestedBundleID: bundleId,
+                removeExtensions: removeExtensions,
+                deviceIdentifier: automaticProvisioningEnabled
+                    ? altServerDeviceIdentifier
+                    : ProvisioningAuditService.currentDeviceIdentifier,
+                strictNestedBundles: false
+            )
+        } else {
+            audit = nil
+        }
+        if let audit {
+            provisioningAudit = audit
+        }
+        if let problem = audit?.firstBlockingMessage(includeNested: false) {
+            signer.phase = .failed(problem)
+            return
+        }
+        let plannedIDs = audit?.selectedProfileIDs ?? []
+        let profileFiles: [ProfileRecord]
+        if plannedIDs.isEmpty {
+            // Preserve the established path if inspection is unavailable.
+            profileFiles = [profile] + profileStore.profiles.filter {
+                $0.id != profile.id && $0.profileIsAuthentic
+            }
+        } else {
+            profileFiles = plannedIDs.compactMap { id in
+                profileStore.profiles.first { $0.id == id }
+            }
+        }
         let profileURLs = profileFiles.map { profileStore.fileURL(for: $0) }
+        let profileNames = profileFiles.map(\.displayName)
         let certCN = cert.commonName
 
         signer.phase = .signing
+        if allowAutomaticProvisioning { provisioningWarning = nil }
         signedIPA = nil
         lastRecordID = nil
         install.installStatus = ""
@@ -458,6 +635,19 @@ struct ContentView: View {
         let injectExt = injectIntoExtensions
 
         Task.detached(priority: .userInitiated) {
+            for (index, profileURL) in profileURLs.enumerated() {
+                let validation = SigningService.validateSigningAsset(
+                    p12: p12, password: pw, profile: profileURL
+                )
+                guard validation.ok else {
+                    let name = profileNames.indices.contains(index) ? profileNames[index] : profileURL.lastPathComponent
+                    await MainActor.run {
+                        signer.phase = .failed("Profile “\(name)” cannot be used with the selected certificate: \(validation.message)")
+                    }
+                    return
+                }
+            }
+
             let signingIPA: URL
             var preparedIPA: URL?
             if let selectedDylib {
@@ -511,6 +701,91 @@ struct ContentView: View {
                 } catch {
                     try? FileManager.default.removeItem(at: partialOutput)
                     signer.phase = .failed("The signed IPA could not be finalized in the library.")
+                }
+            }
+        }
+    }
+
+    private func obtainMissingProfiles(inspection: IPAPreflight,
+                                       audit: ProvisioningAudit,
+                                       certificate: CertificateRecord?) {
+        signer.phase = .provisioning
+        let request = ProvisioningRequestFactory.request(
+            inspection: inspection,
+            audit: audit,
+            certificate: certificate,
+            deviceIdentifier: altServerDeviceIdentifier
+        )
+        let importedCertificateData = certificate.flatMap { try? Data(contentsOf: certStore.fileURL(for: $0)) }
+        let importedCertificatePassword = certificate.flatMap { certStore.savedPassword(for: $0) }
+            ?? (password.isEmpty ? nil : password)
+
+        Task {
+            do {
+                let response = try await altProvisioner.provision(
+                    request: request,
+                    appleID: altServerAppleID,
+                    password: altServerApplePassword,
+                    deviceIdentifier: altServerDeviceIdentifier,
+                    altServer: altServer,
+                    anisetteServerURL: parsedAnisetteServerURL,
+                    importedCertificateData: importedCertificateData,
+                    importedCertificatePassword: importedCertificatePassword
+                )
+                let certificateFilename = "ForgeSign-\(response.teamIdentifier).p12"
+                let importedCertificate: CertificateRecord
+                switch certStore.importCertificate(data: response.certificateData,
+                                                   suggestedFilename: certificateFilename,
+                                                   password: response.certificatePassword,
+                                                   rememberPassword: true) {
+                case .success(let record):
+                    importedCertificate = record
+                case .failure(let error):
+                    throw ProvisioningProviderError.rejected(
+                        "The Apple Account certificate could not be saved: \(error.localizedDescription)"
+                    )
+                }
+
+                var importedProfileIDs: [UUID] = []
+                for supplied in response.profiles {
+                    guard let data = Data(base64Encoded: supplied.dataBase64) else {
+                        throw ProvisioningProviderError.invalidResponse
+                    }
+                    if let metadata = ProvisioningProfileInspector.inspect(data: data),
+                       let uuid = metadata.uuid,
+                       let existing = profileStore.profiles.first(where: { $0.profileUUID == uuid }) {
+                        importedProfileIDs.append(existing.id)
+                        continue
+                    }
+                    switch profileStore.importProfile(data: data, suggestedFilename: supplied.filename) {
+                    case .success(let record):
+                        importedProfileIDs.append(record.id)
+                    case .failure(let error):
+                        throw ProvisioningProviderError.rejected(
+                            "Apple returned an unusable profile: \(error.localizedDescription)"
+                        )
+                    }
+                }
+                bundleId = response.rootBundleIdentifier
+                certStore.selectedID = importedCertificate.id
+                if let rootProfile = profileStore.profiles.first(where: {
+                    importedProfileIDs.contains($0.id)
+                        && $0.applicationIdentifier?.hasSuffix(".\(response.rootBundleIdentifier)") == true
+                }) {
+                    profileStore.select(rootProfile.id)
+                } else if let first = importedProfileIDs.first {
+                    profileStore.select(first)
+                }
+                refreshProvisioningAudit(inspection)
+                signer.phase = .idle
+                sign(allowAutomaticProvisioning: false)
+            } catch {
+                if canSignManually {
+                    provisioningWarning = "Apple Account provisioning could not finish: \(error.localizedDescription) Signing with the imported certificate and profile instead. Extensions and attachments will use the app profile."
+                    signer.phase = .idle
+                    sign(allowAutomaticProvisioning: false)
+                } else {
+                    signer.phase = .failed(error.localizedDescription)
                 }
             }
         }

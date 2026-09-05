@@ -23,6 +23,9 @@ jobs:
       - name: Check formatting
         run: git diff --check
 
+      - name: Test IPA packaging
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
       - name: Select available simulator
         run: |
           DEVICE_ID=$(xcrun simctl list devices available | awk -F '[()]' '/iPhone|iPad/ {print $2; exit}')
@@ -51,15 +54,14 @@ jobs:
 
       - name: Package unsigned IPA
         run: |
-          rm -rf build/ci-ipa
-          mkdir -p build/ci-ipa/Payload
-          ditto build/ci-derived/Build/Products/Release-iphoneos/ForgeSign.app build/ci-ipa/Payload/ForgeSign.app
-          (cd build/ci-ipa && zip -qry ../ForgeSign-latest.ipa Payload)
+          python3 scripts/package_ipa.py pack \
+            build/ci-derived/Build/Products/Release-iphoneos/ForgeSign.app \
+            build/ForgeSign-latest.ipa
 
       - name: Validate current IPA structure
         run: |
           test -f build/ForgeSign-latest.ipa
           unzip -t build/ForgeSign-latest.ipa
-          test "$(unzip -Z1 build/ForgeSign-latest.ipa | grep -c '^Payload/[^/]*/$')" -eq 1
+          python3 scripts/package_ipa.py validate build/ForgeSign-latest.ipa
           unzip -Z1 build/ForgeSign-latest.ipa | grep -Fx 'Payload/ForgeSign.app/ForgeSign'
           ! unzip -Z1 build/ForgeSign-latest.ipa | grep -E '\.(debug\.dylib|preview\.dylib)$'

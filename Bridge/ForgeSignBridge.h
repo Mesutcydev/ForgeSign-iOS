@@ -46,12 +46,20 @@ int forgesign_p12_info(const char* p12Path,
                        char* ouBuf,
                        int ouLen,
                        long long* notAfterEpoch,
+                       char* fingerprintBuf,
+                       int fingerprintLen,
                        char* msgBuf,
                        int msgBufLen);
 
 int forgesign_profile_info(const char* profilePath,
                            char* msgBuf,
                            int msgBufLen);
+
+int forgesign_validate_signing_asset(const char* p12Path,
+                                     const char* password,
+                                     const char* profilePath,
+                                     char* msgBuf,
+                                     int msgBufLen);
 
 int forgesign_inspect_ipa(const char* ipaPath,
                           const char* tempFolder,

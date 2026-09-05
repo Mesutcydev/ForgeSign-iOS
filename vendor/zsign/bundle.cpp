@@ -455,11 +455,15 @@ bool ZBundle::SignNode(jvalue& jvNode)
 				return false;
 			}
 			bForceSign = true;
-		} else if ("/" != strFolder &&
+		} else if ("/" != strFolder && m_pSignAsset && !m_pSignAsset->m_strProvData.empty() &&
 				(strFolder.find("PlugIns/") == 0 || strFolder.find("Extensions/") == 0 ||
 				strFolder.find("Watch/") == 0 || strFolder.find("AppClips/") == 0)) {
-			ZLog::ErrorV(">>> No provisioning profile matches bundle ID: %s\n", strBundleId.c_str());
-			return false;
+			ZLog::PrintV(">>> No dedicated profile for %s; using the app profile.\n", strBundleId.c_str());
+			if (!ZFile::WriteFileV(m_pSignAsset->m_strProvData, "%s/%s/embedded.mobileprovision", m_strAppFolder.c_str(), strFolder.c_str())) {
+				ZLog::ErrorV(">>> Can't write embedded.mobileprovision!\n");
+				return false;
+			}
+			bForceSign = true;
 		}
 	}
 
@@ -536,6 +540,9 @@ bool ZBundle::ModifyPluginsBundleId(const string& strOldBundleId, const string& 
 
 		string strOldPIBundleID = jvInfo["CFBundleIdentifier"];
 		string strNewPIBundleID = strOldPIBundleID;
+		if (!strOldPIBundleID.empty() && !jvInfo.has("ALTBundleID")) {
+			jvInfo["ALTBundleID"] = strOldPIBundleID;
+		}
 		ZUtil::StringReplace(strNewPIBundleID, strOldBundleId, strNewBundleId);
 		jvInfo["CFBundleIdentifier"] = strNewPIBundleID;
 		ZLog::PrintV(">>> BundleId: \t%s -> %s, Plugin\n", strOldPIBundleID.c_str(), strNewPIBundleID.c_str());
@@ -702,6 +709,9 @@ bool ZBundle::ModifyBundleInfo(const string& strBundleId, const string& strBundl
 
 	if (!strBundleId.empty()) {
 		string strOldBundleId = jvInfo["CFBundleIdentifier"];
+		if (!strOldBundleId.empty() && !jvInfo.has("ALTBundleID")) {
+			jvInfo["ALTBundleID"] = strOldBundleId;
+		}
 		jvInfo["CFBundleIdentifier"] = strBundleId;
 		ZLog::PrintV(">>> BundleId: \t%s -> %s\n", strOldBundleId.c_str(), strBundleId.c_str());
 		ModifyPluginsBundleId(strOldBundleId, strBundleId);
@@ -754,6 +764,81 @@ bool ZBundle::ModifyBundleInfo(const string& strBundleId, const string& strBundl
 	}
 
 	jvInfo.style_write_plist_to_file("%s/Info.plist", m_strAppFolder.c_str());
+	return true;
+}
+
+bool ZBundle::ApplyProvisioningMetadata()
+{
+	vector<string> bundles;
+	bundles.push_back(m_strAppFolder);
+	ZFile::EnumFolder(m_strAppFolder.c_str(), true, NULL, [&](bool bFolder, const string& path) {
+		if (bFolder && (ZFile::IsPathSuffix(path, ".app") || ZFile::IsPathSuffix(path, ".appex"))) {
+			bundles.push_back(path);
+		}
+		return false;
+	});
+
+	for (const string& bundlePath : bundles) {
+		jvalue info;
+		if (!info.read_plist_from_file("%s/Info.plist", bundlePath.c_str())) continue;
+		string bundleId = info["CFBundleIdentifier"];
+		string executable = info["CFBundleExecutable"];
+		if (bundleId.empty() || executable.empty()) continue;
+
+		ZSignAsset* bestAsset = NULL;
+		bool bestExplicit = false;
+		for (auto it = m_pSignAssets->begin(); it != m_pSignAssets->end(); ++it) {
+			string pattern = ProfileBundlePattern(it->m_strApplicationId);
+			if (!ProfilePatternMatches(pattern, bundleId)) continue;
+			bool explicitMatch = pattern == bundleId;
+			if (!bestAsset || (explicitMatch && !bestExplicit)) {
+				bestAsset = &(*it);
+				bestExplicit = explicitMatch;
+			}
+		}
+		if (!bestAsset) {
+			if (bundlePath == m_strAppFolder || m_pSignAsset == NULL) {
+				m_strError = "No provisioning profile matches " + bundleId + " (" +
+					(bundlePath == m_strAppFolder ? string("main app") : bundlePath.substr(m_strAppFolder.size() + 1)) + ").";
+				ZLog::ErrorV(">>> %s\n", m_strError.c_str());
+				return false;
+			}
+			bestAsset = m_pSignAsset;
+			ZLog::PrintV(">>> No dedicated profile for %s; using the app profile.\n", bundleId.c_str());
+		}
+		if (bundlePath == m_strAppFolder) m_pSignAsset = bestAsset;
+
+		if (!info.has("ALTBundleID")) info["ALTBundleID"] = bundleId;
+		jvalue entitlements;
+		if (entitlements.read_plist(bestAsset->m_strEntitleData) &&
+			entitlements.has("com.apple.security.application-groups") &&
+			entitlements["com.apple.security.application-groups"].is_array()) {
+			info["ALTAppGroups"] = entitlements["com.apple.security.application-groups"];
+
+			if (info.has("NSExtension") && info["NSExtension"].is_object() &&
+				info["NSExtension"].has("NSExtensionFileProviderDocumentGroup") &&
+				info["NSExtension"]["NSExtensionFileProviderDocumentGroup"].is_string()) {
+				string originalGroup = info["NSExtension"]["NSExtensionFileProviderDocumentGroup"];
+				const jvalue& groups = entitlements["com.apple.security.application-groups"];
+				for (size_t i = 0; i < groups.size(); ++i) {
+					if (!groups.at(i).is_string()) continue;
+					string resolvedGroup = groups.at(i).as_string();
+					if (resolvedGroup == originalGroup || resolvedGroup.find(originalGroup) != string::npos ||
+						originalGroup.find(resolvedGroup) != string::npos) {
+						info["NSExtension"]["NSExtensionFileProviderDocumentGroup"] = resolvedGroup;
+						break;
+					}
+				}
+			}
+		} else if (info.has("ALTAppGroups")) {
+			info.erase("ALTAppGroups");
+		}
+
+		if (!info.style_write_plist_to_file("%s/Info.plist", bundlePath.c_str())) {
+			m_strError = "Could not preserve provisioning metadata for " + bundleId + ".";
+			return false;
+		}
+	}
 	return true;
 }
 
@@ -853,6 +938,7 @@ bool ZBundle::SignFolder(ZSignAsset* pSignAsset,
 							bool bEnableCache,
 							bool bRemoveProvision)
 {
+	m_strError.clear();
 	m_bForceSign = bForce;
 	m_pSignAsset = pSignAsset;
 	m_bWeakInject = bWeakInject;
@@ -890,9 +976,13 @@ bool ZBundle::SignFolder(ZSignAsset* pSignAsset,
 		}
 	}
 
+	if (m_pSignAssets && !ApplyProvisioningMetadata()) {
+		return false;
+	}
+
 	ZFile::RemoveFileV("%s/embedded.mobileprovision", m_strAppFolder.c_str());
-	if (!pSignAsset->m_strProvData.empty()) {
-		if (!ZFile::WriteFileV(pSignAsset->m_strProvData, "%s/embedded.mobileprovision", m_strAppFolder.c_str())) { // embedded.mobileprovision
+	if (!m_pSignAsset->m_strProvData.empty()) {
+		if (!ZFile::WriteFileV(m_pSignAsset->m_strProvData, "%s/embedded.mobileprovision", m_strAppFolder.c_str())) { // embedded.mobileprovision
 			ZLog::ErrorV(">>> Can't write embedded.mobileprovision!\n");
 			return false;
 		}

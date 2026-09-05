@@ -16,6 +16,13 @@ settings:
     ENABLE_BITCODE: "NO"
     ENABLE_DEBUG_DYLIB: "NO"
 
+packages:
+  AltSign:
+    url: https://github.com/rileytestut/AltSign.git
+    # Last upstream revision before the public Swift Package disabled Apple
+    # Account authentication for Marketplace builds.
+    revision: 4746156408ca633bbfce4c267949053ca45886fe
+
 targets:
   ForgeSignMobile:
     type: application
@@ -30,6 +37,11 @@ targets:
           - "third-party/minizip/iowin32.h"
           - "third-party/minizip/mztools.c"
           - "third-party/minizip/mztools.h"
+          # AltSign supplies the same minizip ABI. Compile it only once to
+          # avoid duplicate symbols while keeping zsign's headers unchanged.
+          - "third-party/minizip/ioapi.c"
+          - "third-party/minizip/unzip.c"
+          - "third-party/minizip/zip.c"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.forgesign.mobile
@@ -59,6 +71,9 @@ targets:
       configs:
         Release:
           SWIFT_OPTIMIZATION_LEVEL: "-O"
+    dependencies:
+      - package: AltSign
+        product: AltSign-Static
 
   ForgeSignMobileTests:
     type: bundle.unit-test
@@ -95,6 +110,37 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
 
 schemes:
+  ForgeSignMobile:
+    build:
+      targets:
+        ForgeSignMobile: all
+      preActions:
+        - name: Prepare AltSign dependency
+          settingsTarget: ForgeSignMobile
+          script: |
+            # This AltSign revision refers to OpenSSL's former `ios` folder;
+            # its pinned OpenSSL revision renamed that folder to `iphoneos`.
+            # Repair only the package checkout, before dependency compilation.
+            SOURCE_PACKAGES_ROOT="${BUILD_DIR%%/Build/*}/SourcePackages"
+            OPENSSL_ROOT="$SOURCE_PACKAGES_ROOT/checkouts/AltSign/Dependencies/OpenSSL"
+            if [ -L "$OPENSSL_ROOT/ios" ] && [ ! -e "$OPENSSL_ROOT/ios" ]; then
+              rm "$OPENSSL_ROOT/ios"
+            fi
+            if [ -d "$OPENSSL_ROOT/iphoneos" ] && [ ! -e "$OPENSSL_ROOT/ios" ]; then
+              ln -s iphoneos "$OPENSSL_ROOT/ios"
+            fi
+            # Xcode 16 no longer expands the recursive header paths emitted by
+            # this pre-Marketplace revision. Its remaining paths are relative
+            # to the generated .xcodeproj, so give them the expected root.
+            ALTSIGN_SOURCE="$SOURCE_PACKAGES_ROOT/checkouts/AltSign/AltSign"
+            ALTSIGN_HEADER_ROOT="$PROJECT_FILE_PATH/AltSign"
+            if [ -L "$ALTSIGN_HEADER_ROOT" ] && [ ! -e "$ALTSIGN_HEADER_ROOT" ]; then
+              rm "$ALTSIGN_HEADER_ROOT"
+            fi
+            if [ -d "$ALTSIGN_SOURCE" ] && [ ! -e "$ALTSIGN_HEADER_ROOT" ]; then
+              ln -s "$ALTSIGN_SOURCE" "$ALTSIGN_HEADER_ROOT"
+            fi
+
   ForgeSignUISim:
     build:
       targets:

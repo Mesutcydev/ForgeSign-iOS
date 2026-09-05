@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import SwiftUI
+import CryptoKit
 
 struct P12Info {
     let commonName: String?
@@ -8,6 +9,7 @@ struct P12Info {
     let teamID: String?
     let notBefore: Date?
     let notAfter: Date?
+    let certificateSHA256: String?
 }
 
 enum ExpiryTone {
@@ -42,24 +44,28 @@ enum P12Inspector {
         var oBuf = [CChar](repeating: 0, count: 256)
         var ouBuf = [CChar](repeating: 0, count: 256)
         var msgBuf = [CChar](repeating: 0, count: 256)
+        var fingerprintBuf = [CChar](repeating: 0, count: 65)
         var notAfter: Int64 = 0
         let status = forgesign_p12_info(url.path, password,
                                         &cnBuf, Int32(cnBuf.count),
                                         &oBuf, Int32(oBuf.count),
                                         &ouBuf, Int32(ouBuf.count),
                                         &notAfter,
+                                        &fingerprintBuf, Int32(fingerprintBuf.count),
                                         &msgBuf, Int32(msgBuf.count))
         guard status == 0 else { return nil }
 
         func string(_ buffer: [CChar]) -> String? {
-            let s = String(cString: buffer)
+            let s = String(decoding: buffer.prefix(while: { $0 != 0 })
+                .map { UInt8(bitPattern: $0) }, as: UTF8.self)
             return s.isEmpty ? nil : s
         }
         return P12Info(commonName: string(cnBuf),
                        organization: string(oBuf),
                        teamID: string(ouBuf),
                        notBefore: nil,
-                       notAfter: notAfter > 0 ? Date(timeIntervalSince1970: TimeInterval(notAfter)) : nil)
+                       notAfter: notAfter > 0 ? Date(timeIntervalSince1970: TimeInterval(notAfter)) : nil,
+                       certificateSHA256: string(fingerprintBuf))
     }
     #endif
 
@@ -81,12 +87,17 @@ enum P12Inspector {
 
         let summary = SecCertificateCopySubjectSummary(certificate) as String?
         let x509 = X509Lite.parse(SecCertificateCopyData(certificate) as Data)
+        let certificateData = SecCertificateCopyData(certificate) as Data
+        let fingerprint = SHA256.hash(data: certificateData)
+            .map { String(format: "%02x", $0) }
+            .joined()
 
         return P12Info(commonName: summary ?? x509?.commonName,
                        organization: x509?.organization,
                        teamID: x509?.teamID,
                        notBefore: x509?.notBefore,
-                       notAfter: x509?.notAfter)
+                       notAfter: x509?.notAfter,
+                       certificateSHA256: fingerprint)
     }
 
     /// Human-readable remaining validity plus a semantic tone

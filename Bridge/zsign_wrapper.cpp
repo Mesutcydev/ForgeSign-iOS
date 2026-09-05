@@ -51,6 +51,98 @@ static string FSReadPlistString(const string& path, const string& key)
     return result;
 }
 
+static bool FSReadProvisioningEntitlements(const string& profilePath, jvalue& entitlements)
+{
+    string profileData;
+    if (!ZFile::ReadFile(profilePath.c_str(), profileData) || profileData.empty()) return false;
+    string payload;
+    if (!ZSignAsset::GetCMSContent(profileData, payload)) return false;
+    jvalue profile;
+    if (!profile.read_plist(payload) || !profile.has("Entitlements") ||
+        !profile["Entitlements"].is_object()) return false;
+    entitlements = profile["Entitlements"];
+    return true;
+}
+
+static jvalue FSStringArrayFromEntitlement(const jvalue& entitlements, const char* key)
+{
+    jvalue values(jvalue::E_ARRAY);
+    if (!entitlements.is_object() || !entitlements.has(key) || !entitlements.at(key).is_array()) {
+        return values;
+    }
+    const jvalue& source = entitlements.at(key);
+    for (size_t i = 0; i < source.size(); ++i) {
+        if (source.at(i).is_string()) values.push_back(source.at(i).as_string());
+    }
+    return values;
+}
+
+static bool FSProfilePatternMatches(const string& applicationIdentifier, const string& bundleID)
+{
+    size_t dot = applicationIdentifier.find('.');
+    string pattern = dot == string::npos ? applicationIdentifier : applicationIdentifier.substr(dot + 1);
+    if (pattern == "*" || pattern == bundleID) return true;
+    if (pattern.size() >= 2 && pattern.compare(pattern.size() - 2, 2, ".*") == 0) {
+        string prefix = pattern.substr(0, pattern.size() - 2);
+        return bundleID == prefix ||
+            (bundleID.size() > prefix.size() && bundleID.compare(0, prefix.size(), prefix) == 0 &&
+             bundleID[prefix.size()] == '.');
+    }
+    size_t patternStart = 0;
+    size_t bundleStart = 0;
+    while (patternStart < pattern.size() || bundleStart < bundleID.size()) {
+        size_t patternEnd = pattern.find('.', patternStart);
+        if (patternEnd == string::npos) patternEnd = pattern.size();
+        size_t bundleEnd = bundleID.find('.', bundleStart);
+        if (bundleEnd == string::npos) bundleEnd = bundleID.size();
+        string patternPart = pattern.substr(patternStart, patternEnd - patternStart);
+        string bundlePart = bundleID.substr(bundleStart, bundleEnd - bundleStart);
+        if (patternPart != "*" && patternPart != bundlePart) return false;
+        patternStart = patternEnd == pattern.size() ? pattern.size() : patternEnd + 1;
+        bundleStart = bundleEnd == bundleID.size() ? bundleID.size() : bundleEnd + 1;
+    }
+    return patternStart == pattern.size() && bundleStart == bundleID.size();
+}
+
+static set<string> FSStringSet(const jvalue& value)
+{
+    set<string> result;
+    if (!value.is_array()) return result;
+    for (size_t i = 0; i < value.size(); ++i) {
+        if (value.at(i).is_string()) result.insert(value.at(i).as_string());
+    }
+    return result;
+}
+
+static void FSAppendSignableBundle(jvalue& bundles,
+                                   const string& appFolder,
+                                   const string& bundleFolder,
+                                   const string& kind)
+{
+    const string infoPath = bundleFolder + "/Info.plist";
+    const string bundleID = FSReadPlistString(infoPath, "CFBundleIdentifier");
+    const string executable = FSReadPlistString(infoPath, "CFBundleExecutable");
+    if (bundleID.empty() || executable.empty()) return;
+
+    jvalue bundle(jvalue::E_OBJECT);
+    bundle["path"] = bundleFolder == appFolder ? "/" : bundleFolder.substr(appFolder.size() + 1);
+    bundle["kind"] = kind;
+    bundle["bundleIdentifier"] = bundleID;
+    bundle["entitlementsAvailable"] = false;
+    bundle["requiredAppGroups"] = jvalue(jvalue::E_ARRAY);
+    bundle["requiredKeychainAccessGroups"] = jvalue(jvalue::E_ARRAY);
+
+    jvalue entitlements;
+    if (FSReadProvisioningEntitlements(bundleFolder + "/embedded.mobileprovision", entitlements)) {
+        bundle["entitlementsAvailable"] = true;
+        bundle["requiredAppGroups"] = FSStringArrayFromEntitlement(
+            entitlements, "com.apple.security.application-groups");
+        bundle["requiredKeychainAccessGroups"] = FSStringArrayFromEntitlement(
+            entitlements, "keychain-access-groups");
+    }
+    bundles.push_back(bundle);
+}
+
 static bool FSSanitizeICloudEntitlements(string& entitlementData)
 {
     if (entitlementData.empty()) return false;
@@ -255,7 +347,9 @@ static int FS_SignIPA(const char* ipaPath,
                                   false); // remove provision
     if (!bRet) {
         ZFile::RemoveFolder(strFolder.c_str());
-        setMsg("Signing failed. See log for details.");
+        setMsg(bundle.m_strError.empty()
+            ? "Signing failed while processing an executable or sealed resource."
+            : bundle.m_strError);
         return 12;
     }
 
@@ -596,6 +690,8 @@ extern "C" int forgesign_inspect_ipa(const char* ipaPath,
     result["signedMachOCount"] = 0;
     result["encryptedExecutableCount"] = 0;
     result["encryptedPaths"] = jvalue(jvalue::E_ARRAY);
+    result["bundles"] = jvalue(jvalue::E_ARRAY);
+    FSAppendSignableBundle(result["bundles"], appFolder, appFolder, "app");
 
     ZFile::EnumFolder(appFolder.c_str(), true, NULL, [&](bool bFolder, const string& path) {
         if (bFolder) {
@@ -615,6 +711,17 @@ extern "C" int forgesign_inspect_ipa(const char* ipaPath,
                 (path.find("/Watch/") != string::npos ||
                  path.find("/WatchKit/") != string::npos)) {
                 result["watchAppCount"] = result["watchAppCount"].as_int() + 1;
+            }
+            if (ZFile::IsPathSuffix(path, ".appex")) {
+                FSAppendSignableBundle(result["bundles"], appFolder, path, "extension");
+            } else if (ZFile::IsPathSuffix(path, ".app")) {
+                string kind = "nestedApp";
+                if (path.find("/Watch/") != string::npos || path.find("/WatchKit/") != string::npos) {
+                    kind = "watchApp";
+                } else if (path.find("/AppClips/") != string::npos) {
+                    kind = "appClip";
+                }
+                FSAppendSignableBundle(result["bundles"], appFolder, path, kind);
             }
             return false;
         }
@@ -741,6 +848,40 @@ extern "C" int forgesign_verify_ipa(const char* ipaPath,
                 failure = "Missing embedded provisioning profile: " + bundlePath.substr(appFolder.size() + 1);
                 break;
             }
+
+            const string bundleID = FSReadPlistString(bundlePath + "/Info.plist", "CFBundleIdentifier");
+            jvalue profileEntitlements;
+            if (bundleID.empty() ||
+                !FSReadProvisioningEntitlements(bundlePath + "/embedded.mobileprovision", profileEntitlements)) {
+                ok = false;
+                failure = "Invalid embedded provisioning profile: " + bundlePath.substr(appFolder.size() + 1);
+                break;
+            }
+            const string applicationIdentifier = profileEntitlements["application-identifier"].as_cstr();
+            const bool profileMatches = !applicationIdentifier.empty() &&
+                FSProfilePatternMatches(applicationIdentifier, bundleID);
+            if (!profileMatches && bundlePath == appFolder) {
+                ok = false;
+                failure = "Embedded profile does not match bundle ID " + bundleID + ".";
+                break;
+            }
+
+            jvalue info;
+            if (!info.read_plist_from_file("%s/Info.plist", bundlePath.c_str())) {
+                ok = false;
+                failure = "Could not read signed bundle metadata for " + bundleID + ".";
+                break;
+            }
+            if (profileMatches) {
+                const set<string> profileGroups = FSStringSet(
+                    profileEntitlements["com.apple.security.application-groups"]);
+                const set<string> metadataGroups = FSStringSet(info["ALTAppGroups"]);
+                if (profileGroups != metadataGroups) {
+                    ok = false;
+                    failure = "ALTAppGroups does not match the signed profile for " + bundleID + ".";
+                    break;
+                }
+            }
         }
     }
 
@@ -762,6 +903,8 @@ extern "C" int forgesign_p12_info(const char* p12Path,
                                   char* ouBuf,
                                   int ouLen,
                                   long long* notAfterEpoch,
+                                  char* fingerprintBuf,
+                                  int fingerprintLen,
                                   char* msgBuf,
                                   int msgBufLen)
 {
@@ -802,6 +945,22 @@ extern "C" int forgesign_p12_info(const char* p12Path,
     FSCopyNameEntry(subj, NID_commonName, cnBuf, cnLen);
     FSCopyNameEntry(subj, NID_organizationName, oBuf, oLen);
     FSCopyNameEntry(subj, NID_organizationalUnitName, ouBuf, ouLen);
+
+    if (fingerprintBuf && fingerprintLen > 0) {
+        fingerprintBuf[0] = 0;
+        unsigned char digest[EVP_MAX_MD_SIZE];
+        unsigned int digestLength = 0;
+        if (X509_digest(cert, EVP_sha256(), digest, &digestLength)) {
+            string fingerprint;
+            static const char* hex = "0123456789abcdef";
+            fingerprint.reserve(digestLength * 2);
+            for (unsigned int i = 0; i < digestLength; ++i) {
+                fingerprint.push_back(hex[(digest[i] >> 4) & 0x0f]);
+                fingerprint.push_back(hex[digest[i] & 0x0f]);
+            }
+            snprintf(fingerprintBuf, fingerprintLen, "%s", fingerprint.c_str());
+        }
+    }
 
     if (notAfterEpoch) {
         *notAfterEpoch = 0;
@@ -883,6 +1042,28 @@ extern "C" int forgesign_profile_info(const char* profilePath,
         setMsg("Provisioning profile payload is invalid.");
         return 6;
     }
+    return 0;
+}
+
+extern "C" int forgesign_validate_signing_asset(const char* p12Path,
+                                                  const char* password,
+                                                  const char* profilePath,
+                                                  char* msgBuf,
+                                                  int msgBufLen)
+{
+    auto setMsg = [&](const string& message) {
+        if (msgBuf && msgBufLen > 0) snprintf(msgBuf, msgBufLen, "%s", message.c_str());
+    };
+    if (!p12Path || !profilePath) {
+        setMsg("The certificate or provisioning profile is missing.");
+        return 1;
+    }
+    ZSignAsset asset;
+    if (!asset.Init("", p12Path, profilePath, "", password ? password : "", false, true, false)) {
+        setMsg("The profile does not contain the certificate, or the P12 password is incorrect.");
+        return 2;
+    }
+    setMsg("Certificate and profile match.");
     return 0;
 }
 

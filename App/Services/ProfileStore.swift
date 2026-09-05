@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 struct ProfileRecord: Codable, Identifiable, Equatable {
     let id: UUID
@@ -10,12 +11,19 @@ struct ProfileRecord: Codable, Identifiable, Equatable {
     let provisionedDeviceCount: Int?
     let provisionsAllDevices: Bool?
     let getTaskAllow: Bool?
+    let profileUUID: String?
+    let provisionedDevices: [String]
+    let appGroups: [String]
+    let keychainAccessGroups: [String]
+    let developerCertificateSHA256: [String]
     let profileIsAuthentic: Bool
     let addedAt: Date
 
     private enum CodingKeys: String, CodingKey {
         case id, filename, name, teamID, applicationIdentifier, notAfter
         case provisionedDeviceCount, provisionsAllDevices, getTaskAllow
+        case profileUUID, provisionedDevices, appGroups, keychainAccessGroups
+        case developerCertificateSHA256
         case profileIsAuthentic, addedAt
     }
 
@@ -30,12 +38,19 @@ struct ProfileRecord: Codable, Identifiable, Equatable {
         provisionedDeviceCount = try values.decodeIfPresent(Int.self, forKey: .provisionedDeviceCount)
         provisionsAllDevices = try values.decodeIfPresent(Bool.self, forKey: .provisionsAllDevices)
         getTaskAllow = try values.decodeIfPresent(Bool.self, forKey: .getTaskAllow)
+        profileUUID = try values.decodeIfPresent(String.self, forKey: .profileUUID)
+        provisionedDevices = try values.decodeIfPresent([String].self, forKey: .provisionedDevices) ?? []
+        appGroups = try values.decodeIfPresent([String].self, forKey: .appGroups) ?? []
+        keychainAccessGroups = try values.decodeIfPresent([String].self, forKey: .keychainAccessGroups) ?? []
+        developerCertificateSHA256 = try values.decodeIfPresent([String].self, forKey: .developerCertificateSHA256) ?? []
         profileIsAuthentic = try values.decodeIfPresent(Bool.self, forKey: .profileIsAuthentic) ?? false
         addedAt = try values.decode(Date.self, forKey: .addedAt)
     }
 
     init(id: UUID, filename: String, name: String?, teamID: String?, applicationIdentifier: String?,
          notAfter: Date?, provisionedDeviceCount: Int?, provisionsAllDevices: Bool?, getTaskAllow: Bool?,
+         profileUUID: String? = nil, provisionedDevices: [String] = [], appGroups: [String] = [],
+         keychainAccessGroups: [String] = [], developerCertificateSHA256: [String] = [],
          profileIsAuthentic: Bool = false, addedAt: Date) {
         self.id = id
         self.filename = filename
@@ -46,6 +61,11 @@ struct ProfileRecord: Codable, Identifiable, Equatable {
         self.provisionedDeviceCount = provisionedDeviceCount
         self.provisionsAllDevices = provisionsAllDevices
         self.getTaskAllow = getTaskAllow
+        self.profileUUID = profileUUID
+        self.provisionedDevices = provisionedDevices
+        self.appGroups = appGroups
+        self.keychainAccessGroups = keychainAccessGroups
+        self.developerCertificateSHA256 = developerCertificateSHA256
         self.profileIsAuthentic = profileIsAuthentic
         self.addedAt = addedAt
     }
@@ -57,7 +77,23 @@ struct ProfileRecord: Codable, Identifiable, Equatable {
                       applicationIdentifier: applicationIdentifier, notAfter: notAfter,
                       provisionedDeviceCount: provisionedDeviceCount,
                       provisionsAllDevices: provisionsAllDevices, getTaskAllow: getTaskAllow,
+                      profileUUID: profileUUID, provisionedDevices: provisionedDevices,
+                      appGroups: appGroups, keychainAccessGroups: keychainAccessGroups,
+                      developerCertificateSHA256: developerCertificateSHA256,
                       profileIsAuthentic: value, addedAt: addedAt)
+    }
+
+    func refreshed(with info: ProvisioningProfileMetadata, authenticity: Bool) -> ProfileRecord {
+        ProfileRecord(id: id, filename: filename, name: info.name, teamID: info.teamID,
+                      applicationIdentifier: info.applicationIdentifier,
+                      notAfter: info.expirationDate,
+                      provisionedDeviceCount: info.provisionedDevices.isEmpty ? nil : info.provisionedDevices.count,
+                      provisionsAllDevices: info.provisionsAllDevices,
+                      getTaskAllow: info.getTaskAllow,
+                      profileUUID: info.uuid, provisionedDevices: info.provisionedDevices,
+                      appGroups: info.appGroups, keychainAccessGroups: info.keychainAccessGroups,
+                      developerCertificateSHA256: info.developerCertificateSHA256,
+                      profileIsAuthentic: authenticity, addedAt: addedAt)
     }
 }
 
@@ -142,9 +178,14 @@ final class ProfileStore: ObservableObject {
             teamID: info.teamID,
             applicationIdentifier: info.applicationIdentifier,
             notAfter: info.expirationDate,
-            provisionedDeviceCount: info.provisionedDeviceCount,
+            provisionedDeviceCount: info.provisionedDevices.isEmpty ? nil : info.provisionedDevices.count,
             provisionsAllDevices: info.provisionsAllDevices,
             getTaskAllow: info.getTaskAllow,
+            profileUUID: info.uuid,
+            provisionedDevices: info.provisionedDevices,
+            appGroups: info.appGroups,
+            keychainAccessGroups: info.keychainAccessGroups,
+            developerCertificateSHA256: info.developerCertificateSHA256,
             profileIsAuthentic: true,
             addedAt: .now
         )
@@ -153,6 +194,22 @@ final class ProfileStore: ObservableObject {
         selectedID = record.id
         save()
         return .success(record)
+    }
+
+    @discardableResult
+    func importProfile(data: Data, suggestedFilename: String) -> Result<ProfileRecord, ImportError> {
+        let safeName = URL(fileURLWithPath: suggestedFilename).lastPathComponent
+        let filename = safeName.lowercased().hasSuffix(".mobileprovision")
+            ? safeName : "\(safeName).mobileprovision"
+        let temporaryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("forgesign-\(UUID().uuidString)-\(filename)")
+        do {
+            try data.write(to: temporaryURL, options: [.atomic, .completeFileProtection])
+        } catch {
+            return .failure(.copyFailed)
+        }
+        defer { try? FileManager.default.removeItem(at: temporaryURL) }
+        return importProfile(from: temporaryURL)
     }
 
     func delete(_ record: ProfileRecord) {
@@ -164,13 +221,23 @@ final class ProfileStore: ObservableObject {
         save()
     }
 
+    func select(_ id: UUID?) {
+        selectedID = id
+        save()
+    }
+
     private func load() {
         guard let data = try? Data(contentsOf: indexURL),
               let index = try? JSONDecoder().decode(Index.self, from: data) else { return }
         profiles = index.profiles.compactMap { profile in
-            guard FileManager.default.fileExists(atPath: fileURL(for: profile).path) else { return nil }
-            let verified = ProfileAuthenticityChecker.isAuthentic(fileURL(for: profile))
-            return profile.profileIsAuthentic == verified ? profile : profile.withAuthenticity(verified)
+            let url = fileURL(for: profile)
+            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            let verified = ProfileAuthenticityChecker.isAuthentic(url)
+            guard let data = try? Data(contentsOf: url),
+                  let info = ProvisioningProfileInspector.inspect(data: data) else {
+                return profile.withAuthenticity(false)
+            }
+            return profile.refreshed(with: info, authenticity: verified)
         }
         selectedID = index.selectedID
         if selectedID == nil { selectedID = profiles.first?.id }
@@ -188,8 +255,22 @@ final class ProfileStore: ObservableObject {
 /// out the identity, coverage, and expiry fields ForgeSign surfaces. The CMS
 /// signature itself is not verified here — zsign validates the profile when
 /// signing.
+struct ProvisioningProfileMetadata: Equatable, Sendable {
+    let name: String
+    let uuid: String?
+    let teamID: String?
+    let applicationIdentifier: String?
+    let expirationDate: Date?
+    let provisionedDevices: [String]
+    let provisionsAllDevices: Bool?
+    let getTaskAllow: Bool?
+    let appGroups: [String]
+    let keychainAccessGroups: [String]
+    let developerCertificateSHA256: [String]
+}
+
 enum ProvisioningProfileInspector {
-    static func inspect(data: Data) -> (name: String, teamID: String?, applicationIdentifier: String?, expirationDate: Date?, provisionedDeviceCount: Int?, provisionsAllDevices: Bool?, getTaskAllow: Bool?)? {
+    static func inspect(data: Data) -> ProvisioningProfileMetadata? {
         // The DER/CMS wrapper around the payload is binary, so the whole file
         // can never be decoded as a String. Slice out the embedded plist by
         // its magic markers and let PropertyListSerialization parse it.
@@ -214,11 +295,28 @@ enum ProvisioningProfileInspector {
             }
 
             let applicationIdentifier = entitlements?["application-identifier"] as? String
-            let provisionedDeviceCount = (dict["ProvisionedDevices"] as? [Any])?.count
+            let provisionedDevices = dict["ProvisionedDevices"] as? [String] ?? []
             let provisionsAllDevices = dict["ProvisionsAllDevices"] as? Bool
             let getTaskAllow = entitlements?["get-task-allow"] as? Bool
-            return (name, teamID, applicationIdentifier, dict["ExpirationDate"] as? Date,
-                    provisionedDeviceCount, provisionsAllDevices, getTaskAllow)
+            let appGroups = entitlements?["com.apple.security.application-groups"] as? [String] ?? []
+            let keychainGroups = entitlements?["keychain-access-groups"] as? [String] ?? []
+            let certificates = dict["DeveloperCertificates"] as? [Data] ?? []
+            let certificateHashes = certificates.map { certificate in
+                SHA256.hash(data: certificate).map { String(format: "%02x", $0) }.joined()
+            }
+            return ProvisioningProfileMetadata(
+                name: name,
+                uuid: dict["UUID"] as? String,
+                teamID: teamID,
+                applicationIdentifier: applicationIdentifier,
+                expirationDate: dict["ExpirationDate"] as? Date,
+                provisionedDevices: provisionedDevices,
+                provisionsAllDevices: provisionsAllDevices,
+                getTaskAllow: getTaskAllow,
+                appGroups: appGroups,
+                keychainAccessGroups: keychainGroups,
+                developerCertificateSHA256: certificateHashes
+            )
         }
         return nil
     }

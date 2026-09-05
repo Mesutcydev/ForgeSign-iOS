@@ -120,7 +120,8 @@ final class InstallController: ObservableObject {
                     Task { @MainActor in
                         guard let self, self.operation?.id == id else { return }
                         if opened {
-                            self.installStatus = "Install prompted. Accept the iOS dialog and keep ForgeSign open."
+                            self.installStatus = "Install prompted. Accept the iOS dialog; ForgeSign will move to the Home Screen."
+                            self.moveToHomeScreen(for: id)
                         } else {
                             self.installStatus = "Direct open gated — opening Safari install page…"
                             if let page = URL(string: "\(server.installBaseURL)/install") {
@@ -138,6 +139,17 @@ final class InstallController: ObservableObject {
             }
         }
         operation?.task = task
+    }
+
+    /// ForgeSign is distributed as a sideloaded utility, so after handing the
+    /// OTA request to SpringBoard it can background itself and reveal installation
+    /// progress on the Home Screen. The audio keep-alive remains active so the
+    /// loopback server can finish serving the IPA while ForgeSign is backgrounded.
+    private func moveToHomeScreen(for id: UUID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.operation?.id == id else { return }
+            UIApplication.shared.perform(NSSelectorFromString("suspend"))
+        }
     }
 
     func cancelInstall(markFailed: Bool = false) {

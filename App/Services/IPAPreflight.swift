@@ -16,6 +16,7 @@ struct IPAPreflight: Equatable, Sendable {
     let signedMachOCount: Int
     let encryptedExecutableCount: Int
     let encryptedPaths: [String]
+    let bundles: [SignableBundleInspection]
     let archiveBytes: Int64
 
     var versionText: String {
@@ -35,6 +36,34 @@ struct IPAPreflight: Equatable, Sendable {
     var archiveSizeText: String {
         ByteCountFormatter.string(fromByteCount: archiveBytes, countStyle: .file)
     }
+}
+
+struct SignableBundleInspection: Codable, Equatable, Identifiable, Sendable {
+    enum Kind: String, Codable, Equatable, Sendable {
+        case app
+        case `extension`
+        case watchApp
+        case appClip
+        case nestedApp
+
+        var displayName: String {
+            switch self {
+            case .app: return "App"
+            case .extension: return "Extension"
+            case .watchApp: return "Watch app"
+            case .appClip: return "App Clip"
+            case .nestedApp: return "Nested app"
+            }
+        }
+    }
+
+    var id: String { path }
+    let path: String
+    let kind: Kind
+    let bundleIdentifier: String
+    let entitlementsAvailable: Bool
+    let requiredAppGroups: [String]
+    let requiredKeychainAccessGroups: [String]
 }
 
 enum IPAPreflightState: Equatable, Sendable {
@@ -104,6 +133,7 @@ enum IPAPreflightService {
                 signedMachOCount: payload.signedMachOCount,
                 encryptedExecutableCount: payload.encryptedExecutableCount,
                 encryptedPaths: payload.encryptedPaths,
+                bundles: payload.bundles,
                 archiveBytes: bytes
             ))
         } catch {
@@ -127,6 +157,7 @@ enum IPAPreflightService {
         let signedMachOCount: Int
         let encryptedExecutableCount: Int
         let encryptedPaths: [String]
+        let bundles: [SignableBundleInspection]
     }
     #endif
 }

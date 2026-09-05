@@ -69,6 +69,107 @@ struct MobileCharacterizationTests {
         #expect(message.contains("choose it again"))
     }
 
+    @Test("Provisioning audit selects only the profiles needed by app and extension")
+    func provisioningAuditSelectsMatchingProfiles() {
+        let rootProfile = profile(name: "Root", appID: "TEAM.com.resigned.*",
+                                  groups: ["group.resolved.shared"])
+        let extensionProfile = profile(name: "Extension", appID: "TEAM.com.resigned.demo.shield",
+                                       groups: ["group.resolved.shared"])
+        let unrelated = profile(name: "Other", appID: "TEAM.com.unrelated.app")
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: inspectionWithExtension(),
+            profiles: [rootProfile, extensionProfile, unrelated],
+            preferredProfileID: rootProfile.id,
+            certificate: certificate(),
+            requestedBundleID: "com.resigned.demo",
+            removeExtensions: false,
+            deviceIdentifier: "DEVICE"
+        )
+
+        #expect(audit.isReady)
+        #expect(audit.selectedProfileIDs == [rootProfile.id, extensionProfile.id])
+        #expect(!audit.selectedProfileIDs.contains(unrelated.id))
+        #expect(audit.rows.map(\.resolvedBundleID) == [
+            "com.resigned.demo", "com.resigned.demo.shield"
+        ])
+    }
+
+    @Test("Provisioning audit explains a missing extension profile")
+    func provisioningAuditExplainsMissingExtension() {
+        let rootProfile = profile(name: "Root", appID: "TEAM.com.resigned.demo",
+                                  groups: ["group.resolved.shared"])
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: inspectionWithExtension(),
+            profiles: [rootProfile],
+            preferredProfileID: rootProfile.id,
+            certificate: certificate(),
+            requestedBundleID: "com.resigned.demo",
+            removeExtensions: false,
+            deviceIdentifier: "DEVICE"
+        )
+
+        #expect(!audit.isReady)
+        #expect(audit.rows.last?.state == .missingProfile)
+        #expect(audit.firstBlockingMessage?.contains("com.resigned.demo.shield") == true)
+    }
+
+    @Test("Removing extensions keeps the established single-profile fallback")
+    func provisioningAuditAllowsRemovedExtensions() {
+        let rootProfile = profile(name: "Root", appID: "TEAM.com.resigned.demo",
+                                  groups: ["group.resolved.shared"])
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: inspectionWithExtension(),
+            profiles: [rootProfile],
+            preferredProfileID: rootProfile.id,
+            certificate: certificate(),
+            requestedBundleID: "com.resigned.demo",
+            removeExtensions: true,
+            deviceIdentifier: "DEVICE"
+        )
+
+        #expect(audit.isReady)
+        #expect(audit.rows.last?.state == .removed)
+        #expect(audit.selectedProfileIDs == [rootProfile.id])
+    }
+
+    @Test("Removing extensions does not hide a Watch app profile requirement")
+    func provisioningAuditKeepsWatchAppRequirement() {
+        let rootProfile = profile(name: "Root", appID: "TEAM.com.resigned.demo")
+        let inspection = IPAPreflight(
+            appName: "Demo", bundleIdentifier: "com.original.demo",
+            shortVersion: "1.0", buildVersion: "1", minimumOSVersion: "16.0",
+            nestedBundleCount: 1, extensionCount: 0, frameworkCount: 0,
+            watchAppCount: 1, totalMachOCount: 2, signedMachOCount: 2,
+            encryptedExecutableCount: 0, encryptedPaths: [],
+            bundles: [
+                SignableBundleInspection(path: "/", kind: .app,
+                                         bundleIdentifier: "com.original.demo",
+                                         entitlementsAvailable: true,
+                                         requiredAppGroups: [],
+                                         requiredKeychainAccessGroups: []),
+                SignableBundleInspection(path: "Watch/Demo Watch.app", kind: .watchApp,
+                                         bundleIdentifier: "com.original.demo.watchkitapp",
+                                         entitlementsAvailable: true,
+                                         requiredAppGroups: [],
+                                         requiredKeychainAccessGroups: [])
+            ],
+            archiveBytes: 1_024
+        )
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: inspection,
+            profiles: [rootProfile],
+            preferredProfileID: rootProfile.id,
+            certificate: certificate(),
+            requestedBundleID: "com.resigned.demo",
+            removeExtensions: true,
+            deviceIdentifier: "DEVICE"
+        )
+
+        #expect(!audit.isReady)
+        #expect(audit.rows.last?.state == .missingProfile)
+        #expect(audit.firstBlockingMessage?.contains("watchkitapp") == true)
+    }
+
     @Test("Staged URL comparisons use normalized paths")
     func stagedURLComparison() {
         let base = FileManager.default.temporaryDirectory
@@ -132,6 +233,94 @@ struct MobileCharacterizationTests {
         #expect(try String(contentsOf: url) == "second")
     }
 
+    @Test("AltServer anisette request uses the official length-prefixed message")
+    func altServerRequestFrame() throws {
+        let frame = try AltServerWireProtocol.anisetteRequestFrame()
+        let header = Data(frame.prefix(MemoryLayout<Int32>.size))
+        let payload = Data(frame.dropFirst(MemoryLayout<Int32>.size))
+        let size = try AltServerWireProtocol.responseSize(from: header)
+        let json = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+
+        #expect(size == payload.count)
+        #expect(json["identifier"] as? String == "AnisetteDataRequest")
+        #expect(json["version"] as? Int == 1)
+    }
+
+    @Test("AltServer anisette response preserves all Apple headers")
+    func altServerAnisetteResponse() throws {
+        let payload = Data(#"{"identifier":"AnisetteDataResponse","version":1,"anisetteData":{"X-Mme-Device-Id":"device","X-Apple-I-MD":"otp"}}"#.utf8)
+        let anisette = try AltServerWireProtocol.anisetteData(from: payload)
+
+        #expect(anisette["X-Mme-Device-Id"] == "device")
+        #expect(anisette["X-Apple-I-MD"] == "otp")
+    }
+
+    @Test("AltServer anisette response accepts numeric routingInfo")
+    func altServerAnisetteNumericFields() throws {
+        let payload = Data(#"{"identifier":"AnisetteDataResponse","version":1,"anisetteData":{"machineID":"mid","oneTimePassword":"otp","routingInfo":17106176}}"#.utf8)
+        let anisette = try AltServerWireProtocol.anisetteData(from: payload)
+
+        #expect(anisette["machineID"] == "mid")
+        #expect(anisette["routingInfo"] == "17106176")
+    }
+
+    @Test("AltServer machineID errors explain the macOS 27 workaround")
+    func altServerMachineIDError() throws {
+        let payload = Data(#"{"identifier":"ErrorResponse","version":1,"errorCode":1,"errorDescription":"could not retrieve anisette data value machineID"}"#.utf8)
+        do {
+            _ = try AltServerWireProtocol.anisetteData(from: payload)
+            Issue.record("Expected the machineID response to throw")
+        } catch let error as AltServerClientError {
+            #expect(error.localizedDescription.contains("machineID"))
+            #expect(error.localizedDescription.contains("anisette"))
+        }
+    }
+
+    @Test("Anisette payload maps Apple headers into AltSign JSON keys")
+    func anisettePayloadMapsHeaders() throws {
+        let json = try #require(AnisettePayload.json(from: [
+            "X-Apple-I-MD-M": "machine",
+            "X-Apple-I-MD": "otp",
+            "X-Apple-I-MD-LU": "local",
+            "X-Apple-I-MD-RINFO": "17106176",
+            "X-Mme-Device-Id": "device",
+            "X-Apple-I-SRL-NO": "serial",
+            "X-MMe-Client-Info": "<MacBookPro>",
+            "X-Apple-I-Client-Time": "2026-09-05T12:00:00Z",
+            "X-Apple-Locale": "en_US",
+            "X-Apple-I-TimeZone": "UTC"
+        ]))
+
+        #expect(json["machineID"] == "machine")
+        #expect(json["oneTimePassword"] == "otp")
+        #expect(json["localUserID"] == "local")
+        #expect(json["deviceUniqueIdentifier"] == "device")
+        #expect(json["deviceSerialNumber"] == "serial")
+        #expect(json["deviceDescription"] == "<MacBookPro>")
+        #expect(json["date"] == "2026-09-05T12:00:00Z")
+    }
+
+    @Test("Manual audit warns instead of blocking a missing extension profile")
+    func provisioningAuditWarnsForMissingExtensionWhenNotStrict() {
+        let rootProfile = profile(name: "Root", appID: "TEAM.com.resigned.demo",
+                                  groups: ["group.resolved.shared"])
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: inspectionWithExtension(),
+            profiles: [rootProfile],
+            preferredProfileID: rootProfile.id,
+            certificate: certificate(),
+            requestedBundleID: "com.resigned.demo",
+            removeExtensions: false,
+            deviceIdentifier: "DEVICE",
+            strictNestedBundles: false
+        )
+
+        #expect(audit.isReady)
+        #expect(audit.rows.last?.state == .warning)
+        #expect(audit.firstBlockingMessage(includeNested: false) == nil)
+        #expect(audit.selectedProfileIDs == [rootProfile.id])
+    }
+
     @Test("Diagnostics provide safe user-facing remediation")
     func diagnostics() {
         #expect(ForgeDiagnostic.persistence.errorDescription?.contains("storage") == true)
@@ -153,5 +342,46 @@ struct MobileCharacterizationTests {
 
         #expect(decoded == record)
         #expect(decoded.installState == .installing)
+    }
+
+    private func inspectionWithExtension() -> IPAPreflight {
+        IPAPreflight(
+            appName: "Demo", bundleIdentifier: "com.original.demo",
+            shortVersion: "1.0", buildVersion: "1", minimumOSVersion: "16.0",
+            nestedBundleCount: 1, extensionCount: 1, frameworkCount: 0,
+            watchAppCount: 0, totalMachOCount: 2, signedMachOCount: 2,
+            encryptedExecutableCount: 0, encryptedPaths: [],
+            bundles: [
+                SignableBundleInspection(path: "/", kind: .app,
+                                         bundleIdentifier: "com.original.demo",
+                                         entitlementsAvailable: true,
+                                         requiredAppGroups: ["group.original.shared"],
+                                         requiredKeychainAccessGroups: []),
+                SignableBundleInspection(path: "PlugIns/Shield.appex", kind: .extension,
+                                         bundleIdentifier: "com.original.demo.shield",
+                                         entitlementsAvailable: true,
+                                         requiredAppGroups: ["group.original.shared"],
+                                         requiredKeychainAccessGroups: [])
+            ],
+            archiveBytes: 1_024
+        )
+    }
+
+    private func certificate() -> CertificateRecord {
+        CertificateRecord(id: UUID(), filename: "test.p12", commonName: "Test",
+                          organization: "Test", teamID: "TEAM", notAfter: .distantFuture,
+                          certificateSHA256: "certificate", addedAt: .now,
+                          hasSavedPassword: false)
+    }
+
+    private func profile(name: String, appID: String, groups: [String] = []) -> ProfileRecord {
+        ProfileRecord(id: UUID(), filename: "\(name).mobileprovision", name: name,
+                      teamID: "TEAM", applicationIdentifier: appID,
+                      notAfter: .distantFuture, provisionedDeviceCount: 1,
+                      provisionsAllDevices: false, getTaskAllow: true,
+                      profileUUID: UUID().uuidString, provisionedDevices: ["DEVICE"],
+                      appGroups: groups, keychainAccessGroups: [],
+                      developerCertificateSHA256: ["certificate"],
+                      profileIsAuthentic: true, addedAt: .now)
     }
 }

@@ -116,7 +116,7 @@ struct ProfilesSheet: View {
         let expiry = P12Inspector.expiry(profile.notAfter)
 
         return Button {
-            store.selectedID = profile.id
+            store.select(profile.id)
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")

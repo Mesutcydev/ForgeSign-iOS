@@ -6,6 +6,7 @@ struct IPAPreflightCard: View {
     let state: IPAPreflightState
     let certificate: CertificateRecord?
     let profile: ProfileRecord?
+    let audit: ProvisioningAudit?
 
     @Environment(\.forgeTheme) private var T
 
@@ -52,7 +53,8 @@ struct IPAPreflightCard: View {
                             .foregroundColor(T.ink3)
                     }
                     Spacer(minLength: 8)
-                    GlassStatusPill(text: "ready", color: T.good)
+                    GlassStatusPill(text: audit?.isReady == false ? "action needed" : "ready",
+                                    color: audit?.isReady == false ? T.warn : T.good)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
@@ -99,7 +101,14 @@ struct IPAPreflightCard: View {
                                   detail: encryptedDetail(for: inspection))
                 }
 
-                MonoText(text: "Informational only — signing behavior is unchanged.",
+                if let audit {
+                    GlassRowDivider()
+                    ProvisioningAuditRows(rows: audit.rows)
+                }
+
+                MonoText(text: audit == nil
+                         ? "Checking imported profiles…"
+                         : "Matching profiles are used when available. Bundles without a dedicated profile use the app profile.",
                          size: 9, color: T.ink4)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
@@ -165,5 +174,92 @@ struct IPAPreflightCard: View {
             return "\(count) Mach-O \(count == 1 ? "file is" : "files are") encrypted (for example, \(first))."
         }
         return "\(count) Mach-O \(count == 1 ? "file is" : "files are") encrypted."
+    }
+}
+
+private struct ProvisioningAuditRows: View {
+    let rows: [ProvisioningAuditRow]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(rows) { row in
+                ProvisioningAuditRowView(row: row)
+                if row.id != rows.last?.id {
+                    GlassRowDivider()
+                }
+            }
+        }
+    }
+}
+
+private struct ProvisioningAuditRowView: View {
+    let row: ProvisioningAuditRow
+
+    @Environment(\.forgeTheme) private var T
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(color)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(row.kind.displayName)
+                        .font(T.sans(13, .semibold))
+                        .foregroundColor(T.ink)
+                    Spacer(minLength: 4)
+                    GlassStatusPill(text: statusText, color: color)
+                }
+                Text(row.resolvedBundleID)
+                    .font(T.mono(9))
+                    .foregroundColor(T.ink2)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                Text(row.detail)
+                    .font(T.mono(9))
+                    .foregroundColor(T.ink3)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !row.resolvedAppGroups.isEmpty {
+                    Text("Groups: \(row.resolvedAppGroups.formatted())")
+                        .font(T.mono(9))
+                        .foregroundColor(T.ink3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private var icon: String {
+        switch row.state {
+        case .ready: return "checkmark.seal.fill"
+        case .warning: return "questionmark.diamond.fill"
+        case .removed: return "minus.circle.fill"
+        default: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var color: Color {
+        switch row.state {
+        case .ready: return T.good
+        case .warning, .removed: return T.warn
+        default: return T.bad
+        }
+    }
+
+    private var statusText: String {
+        switch row.state {
+        case .ready: return "ready"
+        case .warning: return "check device"
+        case .removed: return "removed"
+        case .missingProfile: return "missing profile"
+        case .wrongTeam: return "wrong team"
+        case .wrongCertificate: return "wrong certificate"
+        case .expired: return "expired"
+        case .deviceMismatch: return "wrong device"
+        case .missingAppGroups: return "missing groups"
+        }
     }
 }

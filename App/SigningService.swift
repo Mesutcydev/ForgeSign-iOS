@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 final class SigningService: ObservableObject {
     enum Phase: Equatable {
         case idle
+        case provisioning
         case signing
         case done(String)
         case failed(String)
@@ -111,6 +112,23 @@ final class SigningService: ObservableObject {
         let message = String(decoding: messageBuffer.prefix(while: { $0 != 0 })
             .map { UInt8(bitPattern: $0) }, as: UTF8.self)
         return (status == 0, message.isEmpty ? (status == 0 ? "Signed IPA verified." : "Signed IPA verification failed.") : message)
+        #endif
+    }
+
+    nonisolated static func validateSigningAsset(p12: URL, password: String, profile: URL)
+        -> (ok: Bool, message: String) {
+        #if !FORGE_BRIDGE
+        return (true, "Validation is deferred to the device signing engine.")
+        #else
+        var messageBuffer = [CChar](repeating: 0, count: 512)
+        let status = forgesign_validate_signing_asset(
+            p12.path, password, profile.path,
+            &messageBuffer, Int32(messageBuffer.count)
+        )
+        let message = String(decoding: messageBuffer.prefix(while: { $0 != 0 })
+            .map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        return (status == 0,
+                message.isEmpty ? (status == 0 ? "Certificate and profile match." : "Certificate/profile validation failed.") : message)
         #endif
     }
 

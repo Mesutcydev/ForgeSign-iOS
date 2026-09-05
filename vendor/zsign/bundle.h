@@ -42,6 +42,7 @@ private:
 	void GetChangedFiles(jvalue& jvNode, vector<string>& arrChangedFiles);
 	bool ModifyPluginsBundleId(const string& strOldBundleId, const string& strNewBundleId);
 	bool ModifyBundleInfo(const string& strBundleId, const string& strBundleVersion, const string& strDisplayName);
+	bool ApplyProvisioningMetadata();
 	bool ChangeAppIcon();
 
 private:
@@ -74,4 +75,5 @@ public:
 	bool		m_bRemoveUISupportedDevices;
 	bool		m_bInjectExtensions;
 	string			m_strAppFolder;
+	string			m_strError;
 };
