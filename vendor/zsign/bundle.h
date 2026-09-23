@@ -37,7 +37,7 @@ public:
 					bool bRemoveProvision = false);
 
 private:
-	bool SignNode(jvalue& jvNode);
+	bool SignNode(jvalue& jvNode, ZSignAsset* pDefaultAsset);
 	void GetNodeChangedFiles(jvalue& jvNode);
 	void GetChangedFiles(jvalue& jvNode, vector<string>& arrChangedFiles);
 	bool ModifyPluginsBundleId(const string& strOldBundleId, const string& strNewBundleId);

@@ -39,6 +39,39 @@ enum LocalHTTPRoute {
     }
 }
 
+/// Tracks unique IPA bytes served across full and Range requests. iOS can
+/// download an IPA in several ranges, so one completed HTTP response is not
+/// enough to decide that the package was delivered.
+struct LocalIPAProgress {
+    private(set) var ranges: [Range<UInt64>] = []
+
+    mutating func record(offset: UInt64, length: UInt64, total: UInt64) -> Double {
+        guard total > 0, length > 0, offset < total else { return fraction(total: total) }
+        ranges.append(offset..<(offset + min(length, total - offset)))
+        ranges.sort { $0.lowerBound < $1.lowerBound }
+        var merged: [Range<UInt64>] = []
+        for range in ranges {
+            if let last = merged.last, range.lowerBound <= last.upperBound {
+                merged[merged.count - 1] = last.lowerBound..<max(last.upperBound, range.upperBound)
+            } else {
+                merged.append(range)
+            }
+        }
+        ranges = merged
+        return fraction(total: total)
+    }
+
+    func fraction(total: UInt64) -> Double {
+        guard total > 0 else { return 0 }
+        let covered = ranges.reduce(UInt64(0)) { $0 + ($1.upperBound - $1.lowerBound) }
+        return min(1, Double(covered) / Double(total))
+    }
+
+    func isComplete(total: UInt64) -> Bool {
+        total > 0 && ranges.count == 1 && ranges[0] == 0..<total
+    }
+}
+
 /// Local OTA install server (semi-local, Feather-style).
 ///
 /// `itms-services` requires an HTTPS manifest URL that iOS trusts. The public
@@ -52,18 +85,26 @@ enum LocalHTTPRoute {
 ///
 /// Same approach Feather uses for its "semi-local" / server-method-1 install.
 final class LocalInstallServer: @unchecked Sendable {
-    private struct State {
+    private struct State: @unchecked Sendable {
         var listenerFD: Int32 = -1
         var running = false
         var port: UInt16 = 0
+        var ipaURL: URL?
+        var bundleId = ""
+        var bundleVersion = "1.0"
+        var title = "App"
+        var onIPADelivered: (@Sendable () -> Void)?
+        var onIPAProgress: (@Sendable (Double) -> Void)?
+        var ipaProgress = LocalIPAProgress()
+        var didDeliverIPA = false
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
-
-    private var ipaURL: URL?
-    private var bundleId = ""
-    private var bundleVersion = "1.0"
-    private var title = "App"
+    private let connectionQueue = DispatchQueue(
+        label: "com.forgesign.installserver.connections",
+        qos: .userInitiated,
+        attributes: .concurrent
+    )
 
     /// Local loopback base (plain HTTP). Used for the IPA and the Safari
     /// handoff page — never for the itms-services manifest URL.
@@ -78,12 +119,13 @@ final class LocalInstallServer: @unchecked Sendable {
     /// Trusted HTTPS manifest URL (plistserver). This is what itms-services
     /// actually fetches.
     var remoteManifestURL: String {
+        let config = state.withLock { ($0.bundleId, $0.title, $0.bundleVersion, $0.port) }
         var comps = URLComponents(string: "https://api.palera.in/genPlist")!
         comps.queryItems = [
-            URLQueryItem(name: "bundleid", value: bundleId),
-            URLQueryItem(name: "name", value: title),
-            URLQueryItem(name: "version", value: bundleVersion),
-            URLQueryItem(name: "fetchurl", value: payloadURL),
+            URLQueryItem(name: "bundleid", value: config.0),
+            URLQueryItem(name: "name", value: config.1),
+            URLQueryItem(name: "version", value: config.2),
+            URLQueryItem(name: "fetchurl", value: "http://127.0.0.1:\(config.3)/app.ipa"),
         ]
         return comps.url?.absoluteString ?? "https://api.palera.in/genPlist"
     }
@@ -94,11 +136,6 @@ final class LocalInstallServer: @unchecked Sendable {
 
     /// Starts the loopback HTTP server and returns the bound port.
     func start(ipa: URL, bundleId: String, bundleVersion: String, title: String) async throws -> UInt16 {
-        self.ipaURL = ipa
-        self.bundleId = bundleId
-        self.bundleVersion = bundleVersion.isEmpty ? "1.0" : bundleVersion
-        self.title = title.isEmpty ? "App" : title
-
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno), userInfo: nil)
@@ -142,6 +179,12 @@ final class LocalInstallServer: @unchecked Sendable {
         let boundPort = UInt16(boundAddr.sin_port.bigEndian)
 
         state.withLock {
+            $0.ipaURL = ipa
+            $0.bundleId = bundleId
+            $0.bundleVersion = bundleVersion.isEmpty ? "1.0" : bundleVersion
+            $0.title = title.isEmpty ? "App" : title
+            $0.didDeliverIPA = false
+            $0.ipaProgress = LocalIPAProgress()
             $0.listenerFD = fd
             $0.port = boundPort
             $0.running = true
@@ -159,6 +202,12 @@ final class LocalInstallServer: @unchecked Sendable {
             state.running = false
             let fd = state.listenerFD
             state.listenerFD = -1
+            state.port = 0
+            state.ipaURL = nil
+            state.onIPADelivered = nil
+            state.onIPAProgress = nil
+            state.ipaProgress = LocalIPAProgress()
+            state.didDeliverIPA = false
             return fd
         }
         if fd >= 0 { close(fd) }
@@ -168,12 +217,14 @@ final class LocalInstallServer: @unchecked Sendable {
 
     private func acceptLoop(_ fd: Int32) {
         while true {
-            let shouldRun = state.withLock { $0.running }
+            let shouldRun = state.withLock { $0.running && $0.listenerFD == fd }
             guard shouldRun else { break }
 
             let client = accept(fd, nil, nil)
             if client >= 0 {
-                handleConnection(client)
+                connectionQueue.async { [weak self] in
+                    self?.handleConnection(client)
+                }
             } else {
                 Thread.sleep(forTimeInterval: 0.05)
             }
@@ -218,7 +269,8 @@ final class LocalInstallServer: @unchecked Sendable {
 
         switch path {
         case "/app.ipa":
-            guard let ipa = ipaURL, FileManager.default.fileExists(atPath: ipa.path) else {
+            guard let ipa = state.withLock({ $0.ipaURL }),
+                  FileManager.default.fileExists(atPath: ipa.path) else {
                 sendResponse(fd, status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8), headOnly: false)
                 return
             }
@@ -232,8 +284,24 @@ final class LocalInstallServer: @unchecked Sendable {
         }
     }
 
-    var onIPADelivered: (() -> Void)?
-    private var didDeliverIPA = false
+    var onIPADelivered: (@Sendable () -> Void)? {
+        get { state.withLock { $0.onIPADelivered } }
+        set {
+            let alreadyDelivered = state.withLock { state -> Bool in
+                state.onIPADelivered = newValue
+                return state.didDeliverIPA
+            }
+            // The server begins accepting connections before the controller
+            // installs its callback. If a fast client finished in that gap,
+            // deliver the notification as soon as the callback is attached.
+            if alreadyDelivered { newValue?() }
+        }
+    }
+
+    var onIPAProgress: (@Sendable (Double) -> Void)? {
+        get { state.withLock { $0.onIPAProgress } }
+        set { state.withLock { $0.onIPAProgress = newValue } }
+    }
 
     private func sendAll(_ fd: Int32, _ data: Data) -> Bool {
         var sent = 0
@@ -303,24 +371,26 @@ final class LocalInstallServer: @unchecked Sendable {
         if headOnly { try? handle.close(); return }
 
         var remaining = resolved.length
-        var delivered = true
         while remaining > 0 {
             let chunk = handle.readData(ofLength: Int(min(UInt64(1024 * 1024), remaining)))
-            guard !chunk.isEmpty, UInt64(chunk.count) <= remaining, sendAll(fd, chunk) else {
-                delivered = false
-                break
-            }
+            guard !chunk.isEmpty, UInt64(chunk.count) <= remaining, sendAll(fd, chunk) else { break }
+            let offset = resolved.offset + (resolved.length - remaining)
             remaining -= UInt64(chunk.count)
+            let callbacks = state.withLock { state -> ((@Sendable (Double) -> Void)?, (@Sendable () -> Void)?, Double) in
+                guard state.running else { return (nil, nil, 0) }
+                let fraction = state.ipaProgress.record(offset: offset, length: UInt64(chunk.count), total: fileSize)
+                let completed = state.ipaProgress.isComplete(total: fileSize) && !state.didDeliverIPA
+                if completed { state.didDeliverIPA = true }
+                return (state.onIPAProgress, completed ? state.onIPADelivered : nil, fraction)
+            }
+            callbacks.0?(callbacks.2)
+            callbacks.1?()
         }
         try? handle.close()
-        if delivered && remaining == 0 && resolved.full && !didDeliverIPA {
-            didDeliverIPA = true
-            onIPADelivered?()
-        }
     }
 
-    /// Safari-facing page. Redirects into itms-services with the *remote*
-    /// HTTPS plist URL (never a local TLS URL).
+    /// Safari-facing fallback. A visible tap keeps the user on this page if
+    /// iOS rejects the handoff, so they can read the recovery instructions.
     private func installPage() -> String {
         let itms = itmsServicesURL
         // Titles come from filenames; escape before embedding in HTML.
@@ -331,11 +401,8 @@ final class LocalInstallServer: @unchecked Sendable {
              .replacingOccurrences(of: "\"", with: "&quot;")
              .replacingOccurrences(of: "'", with: "&#39;")
         }
-        let safeTitle = html(title)
+        let safeTitle = html(state.withLock { $0.title })
         let safeItms = html(itms)
-        let scriptItms = (try? JSONSerialization.data(withJSONObject: [itms], options: []))
-            .flatMap { String(data: $0, encoding: .utf8) }
-            .map { String($0.dropFirst().dropLast()) } ?? "\"\""
         return """
         <!DOCTYPE html>
         <html>
@@ -363,11 +430,10 @@ final class LocalInstallServer: @unchecked Sendable {
         </style>
         </head>
         <body><div class="bloom b1"></div><div class="bloom b2"></div><div class="card">
-        <h1>Installing \(safeTitle)…</h1>
-        <p>If no prompt appears, tap Install below. Keep ForgeSign open.</p>
+        <h1>Install \(safeTitle)</h1>
+        <p>Tap Install, accept the iOS prompt, then return to ForgeSign to see whether the IPA was delivered.</p>
         <a id="install" href="\(safeItms)">Install</a>
         </div>
-        <script>setTimeout(function(){ window.location.assign(\(scriptItms)); }, 250);</script>
         </body></html>
         """
     }

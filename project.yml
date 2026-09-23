@@ -73,7 +73,14 @@ targets:
           SWIFT_OPTIMIZATION_LEVEL: "-O"
     dependencies:
       - package: AltSign
-        product: AltSign-Static
+        product: AltSign-Dynamic
+        embed: true
+      # Vendored idevice FFI (MIT). Rebuild with
+      # scripts/build_idevice_xcframework.sh; the Swift wrapper is guarded by
+      # `#if canImport(IDevice)` so the app still builds without it.
+      - framework: vendor/idevice/IDevice.xcframework
+        embed: false
+        codeSign: false
 
   ForgeSignMobileTests:
     type: bundle.unit-test
@@ -139,6 +146,22 @@ schemes:
             fi
             if [ -d "$ALTSIGN_SOURCE" ] && [ ! -e "$ALTSIGN_HEADER_ROOT" ]; then
               ln -s "$ALTSIGN_SOURCE" "$ALTSIGN_HEADER_ROOT"
+            fi
+            # Experimental Apple GSA workaround based on AltSign PRs #47/#48/#49/#53:
+            # use a current AuthKit User-Agent and retry transient 5xx responses over
+            # a fresh URLSession connection. Keep this as a patch over the
+            # pinned dependency so the existing signing implementation remains
+            # unchanged and the experiment can be removed independently.
+            ALTSIGN_AUTH_PATCH="$SRCROOT/vendor/altsign-gsa-http503.patch"
+            if [ -f "$ALTSIGN_AUTH_PATCH" ] && [ -d "$ALTSIGN_SOURCE" ]; then
+              if git -C "$ALTSIGN_SOURCE" apply --check "$ALTSIGN_AUTH_PATCH" >/dev/null 2>&1; then
+                git -C "$ALTSIGN_SOURCE" apply --whitespace=nowarn "$ALTSIGN_AUTH_PATCH"
+              elif git -C "$ALTSIGN_SOURCE" apply --reverse --check "$ALTSIGN_AUTH_PATCH" >/dev/null 2>&1; then
+                :
+              else
+                echo "error: AltSign GSA workaround no longer applies to the resolved dependency"
+                exit 1
+              fi
             fi
 
   ForgeSignUISim:

@@ -2,7 +2,7 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign and prepare IPAs on-device; installation uses a loopback server and a trusted remote HTTPS manifest, with no certificate or app-content upload.
 
-**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 2.4](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.4/ForgeSign-2.4.ipa)**
+**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 2.6](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.6/ForgeSign-2.6.ipa)**
 
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
@@ -21,10 +21,11 @@ ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ e
 - **Certificate insights** — common name, organization and team ID are parsed from the certificate, and a live countdown pill shows remaining validity (`200d left`, amber under 30 days, red when expired).
 - **Keychain passwords** — opt-in password storage only in the device-bound iOS Keychain; if Keychain storage is unavailable, ForgeSign asks for the password again.
 - **Install on device** — semi-local OTA install: the IPA is served over loopback HTTP while a trusted remote HTTPS plist (`api.palera.in`) drives `itms-services` directly (Safari is a fallback only). The external manifest service receives install metadata and the local package URL.
+- **Visible install handoff** — ForgeSign stays on the Result screen, shows when iOS requests and downloads the IPA, and keeps Cancel and Safari fallback available while waiting. iOS controls its own final installation progress and may open the Home Screen after the system prompt.
 - **Library** — a persistent history of every signed app with status (signed / installing / delivered / installed / missing), plus reinstall, share and delete actions.
 - **IPA preflight** — package, bundle, encryption and architecture signals are shown before a signing run.
 - **Per-bundle provisioning audit** — the app and every extension show their resolved bundle ID and matching-profile status before signing; only the profiles needed by that IPA are passed to the signer.
-- **Optional Apple Account provisioning** — ForgeSign can create matching profiles for the app, extensions, and File Provider / attachment bundles. It tries this iPhone’s AuthKit anisette first, then AltServer, then an optional anisette HTTP server (needed on macOS 27 when AltServer cannot read `machineID`). Manual imported-profile signing remains available.
+- **Optional Apple Account provisioning** — ForgeSign can create matching profiles for the app, extensions, and File Provider / attachment bundles. Apple sign-in data (anisette) comes from the source you pick: a community anisette server, a server you run yourself, AltServer on your local network, or this iPhone. A remote anisette server means no Mac is required. Manual imported-profile signing remains available.
 - **Sources** — save repository feeds and hand selected IPA downloads into the normal signing flow.
 - **Optional dylib injection** — inject a compatible decrypted dylib into the app, with an opt-in app-extension path, before signing. The original IPA is left untouched.
 - **Glass design language** — lighter translucent cards, ambient color blooms, Liquid Glass on iOS 26+ with a material fallback back to iOS 16, light and dark themes.
@@ -34,7 +35,7 @@ ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ e
 - Xcode 26+ (the build needs the iOS 26 SDK for the Liquid Glass APIs; deployment target is iOS 16)
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
 - iOS 16.0+ on device
-- Optional: AltServer on the same local network, or an anisette server (`http://YOUR-MAC-IP:6969`) when using Apple Account provisioning on macOS 27
+- Optional: AltServer on the same local network, or an anisette server. A community anisette server is used by default, so a Mac is not required for Apple Account provisioning.
 
 ## Build from source
 
@@ -47,6 +48,8 @@ Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the
 
 The device target pins the last AltSign Swift Package revision whose Apple Account authentication path remains enabled. Its scheme pre-action repairs a stale OpenSSL folder reference in that upstream package before compilation.
 
+The device scheme also applies the experimental `vendor/altsign-gsa-http503.patch`. It ports the current AltSign GSA workaround: a modern AuthKit User-Agent, a fresh connection for each authentication request, bounded retries for Apple 5xx responses, and safe HTML-response diagnostics. Remove that patch and its pre-action block if upstream AltSign ships the fix.
+
 Package a device build with the checked packaging script (the output must not already exist):
 
 ```bash
@@ -58,7 +61,7 @@ This excludes Finder metadata and AppleDouble resource forks (`._*`, including m
 
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-2.4.ipa` from [ForgeSign 2.4](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.4). The IPA ships **unsigned** — that is the point of the app: sign it like any other IPA.
+Grab `ForgeSign-2.6.ipa` from [ForgeSign 2.6](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.6). The IPA ships **unsigned** — sign it with your own certificate and provisioning profile before installing.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
@@ -68,23 +71,104 @@ Only sign and install applications you have the rights to modify. Intended for y
 
 ## Apple Account provisioning
 
-Turn on **Use Apple Account with AltServer**, enter the Apple Account credentials and device UDID, and keep at least one anisette source available. When ForgeSign itself is installed by AltStore, its `ALTDeviceID` placeholder is populated automatically. The password is held only for the current run and is sent to Apple by AltSign.
+Turn on **Use Apple Account provisioning**, enter the Apple Account credentials and device UDID, and pick an **Anisette source**. When ForgeSign itself is installed by AltStore, its `ALTDeviceID` placeholder is populated automatically. The password is held only for the current run and is sent to Apple by AltSign — never to an anisette server.
 
-On iOS/macOS 27, AltServer’s built-in anisette often fails with a missing `machineID`. ForgeSign then uses this iPhone, or an anisette server you run locally:
+| Anisette source | What it does |
+|---|---|
+| **Automatic** (default) | Tries a community anisette server, then AltServer on your network, then this iPhone. No Mac required. |
+| **Remote server** | One community anisette server of your choice, then AltServer and this iPhone as fallbacks. |
+| **Custom URL** | An anisette server you run yourself, e.g. `http://YOUR-MAC-LAN-IP:6969`. |
+| **This iPhone** | Only this iPhone's own Apple sign-in data. Nothing leaves the device. |
+| **AltServer** | Only AltServer on the local network. |
+
+The check button beside the source fetches Apple sign-in data once and reports which source answered, so a broken source is visible before a signing run.
+
+Community servers run the open-source anisette protocol (the same server list SideStore publishes) and only relay the Apple sign-in handshake: they receive a device pseudonym, never your Apple password, certificate, or app contents. You can run your own instead:
 
 ```bash
 docker run -d --restart always --name anisette-v3 -p 6969:6969 dadoum/anisette-v3-server
 ```
 
-Enter `http://YOUR-MAC-LAN-IP:6969` in **Anisette URL**. If AltServer is discovered, ForgeSign also tries port 6969 on that Mac automatically.
+Enter `http://YOUR-MAC-LAN-IP:6969` as a **Custom URL**. If AltServer is discovered, ForgeSign also tries port 6969 on that Mac automatically.
 
-If Apple Account provisioning cannot finish, signing continues with the imported certificate and profile. Extensions and attachment / File Provider bundles then use the app profile.
+If Apple Account provisioning cannot finish, ForgeSign checks the imported profiles for manual signing. Each extension or nested app still needs a profile that covers its own bundle ID; a compatible wildcard profile can cover multiple bundles.
 
 ForgeSign reuses a matching imported or previously generated certificate. It deliberately refuses to revoke an unknown existing certificate, because doing so could invalidate AltStore and other installed apps. On a free account already occupied by AltStore, use a separate Apple Account or import the exact matching P12. Normal free-account App ID, active-app and seven-day expiry limits still apply.
 
+## Installation methods
+
+Signing always ends at a verified `.ipa`; installation is a separate layer
+(`App/Services/Installation/`) so a new transport never touches the signing
+pipeline:
+
+| Method | State | Notes |
+|---|---|---|
+| **OTA** | shipped (default) | Loopback HTTP server + trusted HTTPS manifest + `itms-services`, Range requests, Safari fallback, keep-alive. |
+| Direct Device (paired) | built, off by default | Transfers the signed IPA over the on-device tunnel with `idevice` (AFC staging → `installation_proxy` install/upgrade) and records a device-confirmed `installed`. Off until it has been validated against real hardware (`FeatureFlags.directDeviceInstall`). |
+| Remote AltServer | not implemented | Deliberately not wired up: AltStore Classic's "no computer" mode is device pairing + `minimuxer`, not an HTTP API we could speak. Behind `FeatureFlags.remoteAltServerInstall`. |
+
+### Refresh
+
+Refresh re-uses the signing pipeline instead of reinstalling: the **original
+imported package** is kept (opt-in, "Keep originals for refresh", 1.5 GB budget,
+oldest evicted first), re-signed with the current certificate and profile, and
+installed as an upgrade so app data survives.
+
+- The Library shows each app's real profile expiry (`Expires in 2d 7h`) and a
+  readiness pill: `refresh ready` when the original was kept, `refresh due`
+  inside the 48-hour window, `action needed` when the original or credentials
+  are missing.
+- Refresh re-enters the Sign tab with the kept original selected — signing and
+  the final IPA verification are never bypassed.
+- The expiry comes from the profiles embedded at signing time
+  (`profileFiles.notAfter.min()`), so it is what iOS will actually enforce.
+- Expiry scanning runs in the foreground. Background execution is **not**
+  claimed: a sideloaded app cannot rely on `BGTaskScheduler`, and ForgeSign does
+  not pretend otherwise.
+- Remote AltServer stays unimplemented on purpose: AltStore Classic's remote path is device pairing + minimuxer, not an HTTP API.
+
+`InstallCoordinator` owns installation: it resolves the requested method,
+drives the chosen backend, reports phases (preparing → connecting →
+transferring → delivered/installed), and updates the Library. Only a
+device-confirmed install may record `installed` — the OTA handoff records
+`delivered`, because iOS finishes the install out of process.
+
+The **Device Installation** card on the Sign tab carries the groundwork for the
+paired transports:
+
+- **Pairing** — import a `.mobiledevicepairing` or `.plist` record exported by
+  AltStore, SideStore or `idevice_pair`. Records are validated on import
+  (required fields, plausible UDID) and stored in this device's Keychain only
+  (`ThisDeviceOnly`, never iCloud, never backups). They are never logged and
+  never included in diagnostics.
+- **Local tunnel** — probes the candidate endpoints the VPN may expose
+  concurrently with a timeout and reports the one that actually answered.
+  No address is assumed; a reachable endpoint is what counts.
+- **Health check** — one row per requirement, with services that do not exist
+  in this build marked *unavailable* rather than a false green tick, plus
+  **Copy Diagnostics** that is redacted (no pairing payloads, private keys,
+  certificates, or full UDIDs).
+
+## What’s new in 2.6
+
+- Adds a **refresh** model: the original imported package can be kept, each Library entry shows its true profile expiry, and refresh re-signs that original and installs it as an upgrade so app data survives.
+- Adds the **direct-device transport**: a signed IPA is transferred over the on-device tunnel with `idevice` (vendored, MIT, pinned revision — AFC staging then `installation_proxy`), with install-vs-upgrade decided by the device's own app list, honest progress, and a device-confirmed `installed` state. Off by default until validated on hardware; the OTA flow is unchanged.
+- Adds expiry awareness to the Library (`Expires in 2d 7h`, `refresh due` / `action needed` / `refresh ready`) and a header summary of apps expiring within 48 hours.
+- No background-refresh claims: the scan runs when the app is in the foreground.
+- Each app extension and nested app now requires a profile that covers its own bundle ID. On-device Apple Account provisioning creates these profiles; manual signing accepts a matching wildcard profile or imported per-bundle profiles. The signer and IPA verifier reject an invalid app-profile fallback for extensions.
+
+## What’s new in 2.5
+
+- Adds remote anisette servers, so Apple Account provisioning works without a Mac running AltServer — the same Apple-sign-in path AltStore Classic's no-computer mode uses.
+- Adds an **Anisette source** picker with a live check button, so a broken source is visible before signing instead of failing mid-run.
+- The Sign button now always explains what is missing; a disabled button no longer silently does nothing.
+- Keeps AltServer, this-iPhone, and custom-URL anisette sources, with automatic fallback between them.
+- Moves installation behind an `IPAInstallationBackend`/`InstallCoordinator` layer with typed phases and errors, a retry path, and honest Library states. The existing OTA flow is unchanged and remains the only shipped transport.
+- Adds device pairing records (Keychain-only), a tunnel probe that reports what actually answers, and a redacted device-install health check with Copy Diagnostics.
+
 ## What’s new in 2.4
 
-- Restores signing when an IPA has extensions or attachment bundles but only the app profile is imported.
+- Earlier builds attempted to sign extensions with only the app profile. That fallback could produce an IPA rejected during installation and is now rejected before signing.
 - Works around the macOS 27 AltServer `machineID` anisette failure by using this iPhone first, then AltServer, then an optional anisette HTTP server.
 - Keeps Apple Account provisioning for per-extension and App Group profiles when anisette is available, and falls back to the imported profile when it is not.
 

@@ -4,3 +4,4 @@ DerivedData/
 xcuserdata/
 .DS_Store
 __pycache__/
+*.ipa

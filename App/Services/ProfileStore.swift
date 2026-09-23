@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-struct ProfileRecord: Codable, Identifiable, Equatable {
+struct ProfileRecord: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     let filename: String
     let name: String?
@@ -84,16 +84,30 @@ struct ProfileRecord: Codable, Identifiable, Equatable {
     }
 
     func refreshed(with info: ProvisioningProfileMetadata, authenticity: Bool) -> ProfileRecord {
-        ProfileRecord(id: id, filename: filename, name: info.name, teamID: info.teamID,
-                      applicationIdentifier: info.applicationIdentifier,
-                      notAfter: info.expirationDate,
-                      provisionedDeviceCount: info.provisionedDevices.isEmpty ? nil : info.provisionedDevices.count,
-                      provisionsAllDevices: info.provisionsAllDevices,
-                      getTaskAllow: info.getTaskAllow,
-                      profileUUID: info.uuid, provisionedDevices: info.provisionedDevices,
-                      appGroups: info.appGroups, keychainAccessGroups: info.keychainAccessGroups,
-                      developerCertificateSHA256: info.developerCertificateSHA256,
-                      profileIsAuthentic: authenticity, addedAt: addedAt)
+        // A plist parser can still recover a valid profile while omitting an
+        // optional field (notably application-identifier on some profiles).
+        // Never replace known-good cached metadata with that omission during
+        // the background refresh.
+        let refreshedName = info.name == "Provisioning Profile" ? (name ?? info.name) : info.name
+        let refreshedDevices = info.provisionedDevices.isEmpty ? provisionedDevices : info.provisionedDevices
+        let refreshedAppGroups = info.appGroups.isEmpty ? appGroups : info.appGroups
+        let refreshedKeychainGroups = info.keychainAccessGroups.isEmpty ? keychainAccessGroups : info.keychainAccessGroups
+        let refreshedCertificates = info.developerCertificateSHA256.isEmpty
+            ? developerCertificateSHA256 : info.developerCertificateSHA256
+        return ProfileRecord(id: id, filename: filename, name: refreshedName,
+                             teamID: info.teamID ?? teamID,
+                             applicationIdentifier: info.applicationIdentifier ?? applicationIdentifier,
+                             notAfter: info.expirationDate ?? notAfter,
+                             provisionedDeviceCount: info.provisionedDevices.isEmpty
+                               ? provisionedDeviceCount : info.provisionedDevices.count,
+                             provisionsAllDevices: info.provisionsAllDevices ?? provisionsAllDevices,
+                             getTaskAllow: info.getTaskAllow ?? getTaskAllow,
+                             profileUUID: info.uuid ?? profileUUID,
+                             provisionedDevices: refreshedDevices,
+                             appGroups: refreshedAppGroups,
+                             keychainAccessGroups: refreshedKeychainGroups,
+                             developerCertificateSHA256: refreshedCertificates,
+                             profileIsAuthentic: authenticity, addedAt: addedAt)
     }
 }
 
@@ -103,10 +117,17 @@ struct ProfileRecord: Codable, Identifiable, Equatable {
 @MainActor
 final class ProfileStore: ObservableObject {
     @Published private(set) var profiles: [ProfileRecord] = []
+    @Published private(set) var isRefreshingMetadata = false
     @Published var selectedID: UUID?
 
     private let dir: URL
     private let indexURL: URL
+    private var refreshTask: Task<Void, Never>?
+
+    private struct RefreshResult: Sendable {
+        let id: UUID
+        let record: ProfileRecord?
+    }
 
     private struct Index: Codable {
         var profiles: [ProfileRecord] = []
@@ -119,6 +140,7 @@ final class ProfileStore: ObservableObject {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         indexURL = base.appendingPathComponent("profiles.json")
         load()
+        refreshMetadataInBackground()
     }
 
     var selected: ProfileRecord? {
@@ -229,18 +251,67 @@ final class ProfileStore: ObservableObject {
     private func load() {
         guard let data = try? Data(contentsOf: indexURL),
               let index = try? JSONDecoder().decode(Index.self, from: data) else { return }
-        profiles = index.profiles.compactMap { profile in
-            let url = fileURL(for: profile)
-            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-            let verified = ProfileAuthenticityChecker.isAuthentic(url)
-            guard let data = try? Data(contentsOf: url),
-                  let info = ProvisioningProfileInspector.inspect(data: data) else {
-                return profile.withAuthenticity(false)
-            }
-            return profile.refreshed(with: info, authenticity: verified)
+        // Load the cached records synchronously so the UI can render quickly.
+        // Authenticity checks and profile parsing are refreshed off the main
+        // actor below.
+        profiles = index.profiles.filter {
+            FileManager.default.fileExists(atPath: fileURL(for: $0).path)
         }
         selectedID = index.selectedID
-        if selectedID == nil { selectedID = profiles.first?.id }
+        if selectedID == nil || !profiles.contains(where: { $0.id == selectedID }) {
+            selectedID = profiles.first?.id
+        }
+    }
+
+    private func refreshMetadataInBackground() {
+        refreshTask?.cancel()
+        let snapshot = profiles
+        let directory = dir
+        guard !snapshot.isEmpty else {
+            isRefreshingMetadata = false
+            return
+        }
+        isRefreshingMetadata = true
+
+        refreshTask = Task { [weak self] in
+            let results = await Task.detached(priority: .utility) {
+                snapshot.map { profile -> RefreshResult in
+                    let url = directory.appendingPathComponent(profile.filename)
+                    guard FileManager.default.fileExists(atPath: url.path) else {
+                        return RefreshResult(id: profile.id, record: nil)
+                    }
+                    let verified = ProfileAuthenticityChecker.isAuthentic(url)
+                    guard let data = try? Data(contentsOf: url),
+                          let info = ProvisioningProfileInspector.inspect(data: data) else {
+                        return RefreshResult(id: profile.id,
+                                             record: profile.withAuthenticity(false))
+                    }
+                    return RefreshResult(id: profile.id,
+                                         record: profile.refreshed(with: info,
+                                                                   authenticity: verified))
+                }
+            }.value
+
+            guard let self else { return }
+            guard !Task.isCancelled else {
+                self.isRefreshingMetadata = false
+                self.refreshTask = nil
+                return
+            }
+            let refreshed = Dictionary(uniqueKeysWithValues: results.map { ($0.id, $0.record) })
+            // Preserve profiles imported while the background refresh was in
+            // flight, while still dropping records whose file disappeared.
+            self.profiles = self.profiles.compactMap { current in
+                guard let record = refreshed[current.id] else { return current }
+                return record
+            }
+            if self.selectedID == nil || !self.profiles.contains(where: { $0.id == self.selectedID }) {
+                self.selectedID = self.profiles.first?.id
+            }
+            self.isRefreshingMetadata = false
+            self.save()
+            self.refreshTask = nil
+        }
     }
 
     private func save() {
@@ -285,8 +356,8 @@ enum ProvisioningProfileInspector {
                 ?? (dict["ProfileName"] as? String)
                 ?? "Provisioning Profile"
 
-            let entitlements = dict["Entitlements"] as? [String: Any]
-            let entitlementTeamID = entitlements?["com.apple.developer.team-identifier"] as? String
+            let entitlements = dictionaryValue(dict["Entitlements"])
+            let entitlementTeamID = stringValue(entitlements?["com.apple.developer.team-identifier"])
             let teamID: String?
             if let teamArray = dict["TeamIdentifier"] as? [String], let firstTeam = teamArray.first {
                 teamID = firstTeam
@@ -294,7 +365,10 @@ enum ProvisioningProfileInspector {
                 teamID = (dict["TeamIdentifier"] as? String) ?? entitlementTeamID
             }
 
-            let applicationIdentifier = entitlements?["application-identifier"] as? String
+            let applicationIdentifier = stringValue(entitlements?["application-identifier"])
+                ?? stringValue(entitlements?["com.apple.application-identifier"])
+                ?? stringValue(dict["application-identifier"])
+                ?? stringValue(dict["com.apple.application-identifier"])
             let provisionedDevices = dict["ProvisionedDevices"] as? [String] ?? []
             let provisionsAllDevices = dict["ProvisionsAllDevices"] as? Bool
             let getTaskAllow = entitlements?["get-task-allow"] as? Bool
@@ -341,5 +415,22 @@ enum ProvisioningProfileInspector {
         }
 
         return slices
+    }
+
+    private static func dictionaryValue(_ value: Any?) -> [String: Any]? {
+        if let dictionary = value as? [String: Any] { return dictionary }
+        guard let dictionary = value as? NSDictionary else { return nil }
+        var result: [String: Any] = [:]
+        for (key, value) in dictionary {
+            guard let key = key as? String else { continue }
+            result[key] = value
+        }
+        return result
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        guard let value = value as? String else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

@@ -166,10 +166,24 @@ final class RepositoryStore: ObservableObject {
     /// Set when a download finishes — the Sign tab observes this and loads it.
     @Published var pendingIPA: URL?
 
-    private var activeDownloadTask: Task<Void, Never>?
-
     private let indexURL: URL
     private let downloadsDir: URL
+
+    private enum NetworkError: LocalizedError {
+        case invalidResponse
+        case catalogTooLarge
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidResponse:
+                return "The repository server returned an invalid response."
+            case .catalogTooLarge:
+                return "This repository catalog is too large to load safely."
+            }
+        }
+    }
+
+    private static let maximumCatalogBytes = 25 * 1_024 * 1_024
 
     private struct Index: Codable { var repositories: [Repository] = [] }
 
@@ -234,16 +248,11 @@ final class RepositoryStore: ObservableObject {
             var req = URLRequest(url: repo.url)
             req.cachePolicy = .reloadIgnoringLocalCacheData
             req.timeoutInterval = 30
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse,
-                  (200...299).contains(http.statusCode) else {
+            let session = NetworkPolicy.makeValidatedSession()
+            defer { session.invalidateAndCancel() }
+            let (data, http) = try await readCatalog(req, using: session)
+            guard (200...299).contains(http.statusCode) else {
                 fetchError[repo.id] = "The repository server returned an error."
-                return
-            }
-            // Catalogs are untrusted. Avoid a pathological source exhausting
-            // the app's memory and being terminated by iOS.
-            guard data.count <= 25 * 1_024 * 1_024 else {
-                fetchError[repo.id] = "This repository catalog is too large to load safely."
                 return
             }
             let source = try JSONDecoder().decode(RepoSource.self, from: data)
@@ -270,8 +279,13 @@ final class RepositoryStore: ObservableObject {
         downloadError = nil
         defer { if activeDownloadID == app.id { activeDownloadID = nil } }
         do {
-            let (tempURL, resp) = try await URLSession.shared.download(from: url)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            let session = NetworkPolicy.makeValidatedSession()
+            defer { session.invalidateAndCancel() }
+            let (tempURL, resp) = try await session.download(from: url)
+            guard let http = resp as? HTTPURLResponse,
+                  (200...299).contains(http.statusCode),
+                  let finalURL = resp.url,
+                  NetworkPolicy.validateHTTPS(finalURL) else {
                 downloadError = "Download failed — the server returned an error."
                 return
             }
@@ -295,6 +309,32 @@ final class RepositoryStore: ObservableObject {
         } catch {
             downloadError = error.localizedDescription
         }
+    }
+
+    private func readCatalog(_ request: URLRequest,
+                             using session: URLSession) async throws -> (Data, HTTPURLResponse) {
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse,
+              let finalURL = response.url,
+              NetworkPolicy.validateHTTPS(finalURL) else {
+            throw NetworkError.invalidResponse
+        }
+        let expected = response.expectedContentLength
+        guard expected <= Int64(Self.maximumCatalogBytes) || expected == NSURLSessionTransferSizeUnknown else {
+            throw NetworkError.catalogTooLarge
+        }
+
+        var data = Data()
+        if expected > 0 {
+            data.reserveCapacity(Int(expected))
+        }
+        for try await byte in bytes {
+            guard data.count < Self.maximumCatalogBytes else {
+                throw NetworkError.catalogTooLarge
+            }
+            data.append(byte)
+        }
+        return (data, http)
     }
 
     /// A safe on-disk filename like `AppName-1.2.3.ipa`.

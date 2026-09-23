@@ -59,7 +59,6 @@ enum ProvisioningAuditService {
                           requestedBundleID: String,
                           removeExtensions: Bool,
                           deviceIdentifier: String? = currentDeviceIdentifier,
-                          strictNestedBundles: Bool = true,
                           now: Date = .now) -> ProvisioningAudit {
         let trimmedBundleID = requestedBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
         let rootOriginalID = inspection.bundleIdentifier
@@ -87,28 +86,12 @@ enum ProvisioningAuditService {
                                certificate: certificate,
                                deviceIdentifier: deviceIdentifier,
                                now: now)
-            if !strictNestedBundles && bundle.kind != .app &&
-                (result.state == .missingProfile || result.state == .missingAppGroups) {
-                return ProvisioningAuditRow(
-                    path: result.path, kind: result.kind,
-                    originalBundleID: result.originalBundleID,
-                    resolvedBundleID: result.resolvedBundleID,
-                    state: .warning,
-                    detail: result.state == .missingAppGroups
-                        ? "No matching App Groups were found; the app profile will be used."
-                        : "No matching profile; the app profile will be used for this bundle.",
-                    profileID: result.profileID, profileName: result.profileName,
-                    requiredAppGroups: result.requiredAppGroups,
-                    resolvedAppGroups: result.resolvedAppGroups
-                )
-            }
             return result
         }
 
         enforceSharedAppGroups(in: &rows)
 
-        // The native signer historically treats the first asset as the root
-        // fallback. Keep the root profile first, then stable bundle order.
+        // Keep the root profile first, then stable bundle order.
         let usableIDs = rows.compactMap { row in
             row.state.isBlocking ? nil : row.profileID
         }
@@ -268,15 +251,19 @@ enum ProvisioningAuditService {
     private static func resolvedBundleID(for original: String,
                                          rootOriginalID: String,
                                          rootResolvedID: String) -> String {
-        guard rootOriginalID != rootResolvedID else { return original }
-        return original.replacingOccurrences(of: rootOriginalID, with: rootResolvedID)
+        BundleIdentifierResolver.replacingRootPrefix(in: original,
+                                                     originalRoot: rootOriginalID,
+                                                     resolvedRoot: rootResolvedID)
     }
 
     private static func profileMatchesBundleID(_ profile: ProfileRecord, bundleID: String) -> Bool {
-        guard let applicationIdentifier = profile.applicationIdentifier,
-              let separator = applicationIdentifier.firstIndex(of: ".") else { return false }
+        guard let applicationIdentifier = profile.applicationIdentifier?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              !applicationIdentifier.isEmpty else { return false }
+        if applicationIdentifier == bundleID { return true }
+        guard let separator = applicationIdentifier.firstIndex(of: ".") else { return false }
         let pattern = String(applicationIdentifier[applicationIdentifier.index(after: separator)...])
-        return wildcardMatch(pattern: pattern, value: bundleID)
+        return profilePatternMatches(pattern: pattern, bundleID: bundleID)
     }
 
     private static func matchRank(_ profile: ProfileRecord,
@@ -290,22 +277,37 @@ enum ProvisioningAuditService {
         return exact + preferred + pattern.filter { $0 != "*" }.count
     }
 
-    private static func wildcardMatch(pattern: String, value: String) -> Bool {
-        if pattern == "*" || pattern == value { return true }
-        let pieces = pattern.split(separator: "*", omittingEmptySubsequences: false).map(String.init)
-        var searchStart = value.startIndex
-        for (index, piece) in pieces.enumerated() where !piece.isEmpty {
-            if index == 0 && !pattern.hasPrefix("*") {
-                guard value[searchStart...].hasPrefix(piece) else { return false }
-                searchStart = value.index(searchStart, offsetBy: piece.count)
-                continue
-            }
-            guard let range = value.range(of: piece, range: searchStart..<value.endIndex) else { return false }
-            searchStart = range.upperBound
+    /// Mirrors zsign's application-identifier matching. A trailing `.*`
+    /// covers the profile's root identifier as well as dot-delimited children;
+    /// a component `*` covers exactly one bundle-ID component.
+    private static func profilePatternMatches(pattern: String, bundleID: String) -> Bool {
+        if pattern == "*" || pattern == bundleID { return true }
+        if pattern.hasSuffix(".*") {
+            let prefix = String(pattern.dropLast(2))
+            return bundleID == prefix || bundleID.hasPrefix(prefix + ".")
         }
-        if let last = pieces.last, !last.isEmpty, !pattern.hasSuffix("*") {
-            return value.hasSuffix(last)
+
+        let patternParts = pattern.split(separator: ".", omittingEmptySubsequences: false)
+        let bundleParts = bundleID.split(separator: ".", omittingEmptySubsequences: false)
+        guard patternParts.count == bundleParts.count else { return false }
+        return zip(patternParts, bundleParts).allSatisfy { patternPart, bundlePart in
+            patternPart == "*" || patternPart == bundlePart
         }
-        return true
+    }
+}
+
+enum BundleIdentifierResolver {
+    /// Replaces only the root bundle identifier and its dot-delimited
+    /// descendants. A plain string replacement would also rewrite a repeated
+    /// root-looking segment inside a nested identifier.
+    static func replacingRootPrefix(in bundleID: String,
+                                    originalRoot: String,
+                                    resolvedRoot: String) -> String {
+        guard !originalRoot.isEmpty,
+              originalRoot != resolvedRoot,
+              bundleID == originalRoot || bundleID.hasPrefix(originalRoot + ".") else {
+            return bundleID
+        }
+        return resolvedRoot + bundleID.dropFirst(originalRoot.count)
     }
 }

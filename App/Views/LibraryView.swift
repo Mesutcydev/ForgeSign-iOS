@@ -4,12 +4,17 @@ import SwiftUI
 /// delete actions.
 struct LibraryView: View {
     @EnvironmentObject private var history: HistoryStore
+    @EnvironmentObject private var refreshSources: RefreshSourceStore
     @Environment(\.forgeTheme) private var T
 
     var onInstall: (SigningRecord) -> Void = { _ in }
+    var onRefresh: (SigningRecord) -> Void = { _ in }
 
     @State private var activeRecord: SigningRecord?
     @State private var shareRecord: SigningRecord?
+    @AppStorage("retainRefreshSources") private var retainRefreshSources = false
+
+    private var scan: RefreshScan { RefreshScanner.scan(history.records) }
 
     var body: some View {
         NavigationStack {
@@ -50,11 +55,24 @@ struct LibraryView: View {
                     Button("Install on Device") { onInstall(record) }
                     Button("Share / Save IPA") { shareRecord = record }
                 }
-                Button("Delete", role: .destructive) { history.delete(record) }
+                if refreshSources.sourceURL(for: record.id) != nil {
+                    Button("Refresh — re-sign \(refreshSources.sourceName(for: record.id) ?? "the kept original")") {
+                        onRefresh(record)
+                    }
+                    Button("Drop kept original") { refreshSources.removeSource(for: record.id) }
+                }
+                if history.fileExists(for: record) {
+                    Button("Delete signed IPA", role: .destructive) { history.delete(record) }
+                } else {
+                    Button("Remove from Library", role: .destructive) { history.delete(record) }
+                }
             }
             .sheet(item: $shareRecord) { record in
                 ShareSheet(items: [history.outputURL(for: record)])
             }
+        }
+        .task {
+            history.refreshFileAvailability()
         }
     }
 
@@ -67,6 +85,22 @@ struct LibraryView: View {
                 .foregroundColor(T.ink)
 
             MonoText(text: "SIGNED APP HISTORY", size: 10, weight: .semibold, color: T.ink3)
+
+            if let summary = scan.summary {
+                GlassStatusPill(text: summary, color: T.warn)
+            }
+
+            Toggle(isOn: $retainRefreshSources) {
+                MonoText(text: "KEEP ORIGINALS FOR REFRESH", size: 9, weight: .semibold, color: T.ink3)
+            }
+            .toggleStyle(.switch)
+            .tint(T.accent)
+            .padding(.horizontal, 24)
+
+            if retainRefreshSources, refreshSources.totalBytes > 0 {
+                MonoText(text: "KEPT \(ByteCountFormatter.string(fromByteCount: refreshSources.totalBytes, countStyle: .file))",
+                         size: 9, color: T.ink4)
+            }
         }
         .padding(.top, 32)
         .padding(.bottom, 8)
@@ -130,12 +164,18 @@ struct LibraryView: View {
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
+                    if let expiryText = RefreshPlanner.expiryText(record.profileExpiresAt) {
+                        Text(expiryText)
+                            .font(T.mono(9, .medium))
+                            .foregroundColor(expiryColor(record))
+                    }
                 }
 
                 Spacer(minLength: 8)
 
                 VStack(alignment: .trailing, spacing: 4) {
                     statusPill(record)
+                    refreshPill(record)
                     Text(record.date.formatted(date: .abbreviated, time: .shortened))
                         .font(T.mono(9, .medium))
                         .foregroundColor(T.ink4)
@@ -166,5 +206,23 @@ struct LibraryView: View {
                 GlassStatusPill(text: "failed", color: T.bad)
             }
         }
+    }
+
+    @ViewBuilder
+    private func refreshPill(_ record: SigningRecord) -> some View {
+        if RefreshPlanner.shouldRefresh(expiry: record.profileExpiresAt) {
+            let canRefresh = refreshSources.sourceURL(for: record.id) != nil
+            GlassStatusPill(text: canRefresh ? "refresh due" : "action needed",
+                            color: canRefresh ? T.warn : T.bad)
+        } else if refreshSources.sourceURL(for: record.id) != nil {
+            GlassStatusPill(text: "refresh ready", color: T.accent2)
+        }
+    }
+
+    private func expiryColor(_ record: SigningRecord) -> Color {
+        guard let expiry = record.profileExpiresAt else { return T.ink4 }
+        let interval = expiry.timeIntervalSinceNow
+        if interval <= 0 { return T.bad }
+        return interval <= RefreshPlanner.refreshWindow ? T.warn : T.ink3
     }
 }

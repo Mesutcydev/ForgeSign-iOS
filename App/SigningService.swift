@@ -132,11 +132,4 @@ final class SigningService: ObservableObject {
         #endif
     }
 
-    func cleanStaged() {
-        if let items = try? FileManager.default.contentsOfDirectory(at: workDir, includingPropertiesForKeys: nil) {
-            for item in items where item.lastPathComponent != "tmp" {
-                try? FileManager.default.removeItem(at: item)
-            }
-        }
-    }
 }

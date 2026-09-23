@@ -12,6 +12,7 @@ enum AltServerClientError: LocalizedError, Sendable {
     case connectionFailed(String)
     case invalidFrame
     case invalidResponse
+    case httpStatus(Int)
     case serverRejected(Int?, String?)
     case allSourcesFailed([String])
 
@@ -25,6 +26,8 @@ enum AltServerClientError: LocalizedError, Sendable {
             return "AltServer returned an incomplete response."
         case .invalidResponse:
             return "AltServer returned an unsupported anisette response."
+        case .httpStatus(let status):
+            return "The anisette server returned HTTP \(status). Apple may be temporarily unavailable; try again shortly."
         case .serverRejected(_, let message) where message?.localizedCaseInsensitiveContains("machineID") == true:
             return "AltServer on macOS 27 could not create anisette data (missing machineID). ForgeSign will use this iPhone or an anisette server instead."
         case .serverRejected(let code, let message):
@@ -32,8 +35,8 @@ enum AltServerClientError: LocalizedError, Sendable {
             if let code { return "AltServer rejected the anisette request (error \(code))." }
             return "AltServer rejected the anisette request."
         case .allSourcesFailed(let details):
-            let suffix = details.isEmpty ? "" : " \(details.joined(separator: " "))"
-            return "Could not get Apple login data. On macOS 27 AltServer cannot read machineID. Use this iPhone, or run an anisette server on your Mac (http://YOUR-MAC-IP:6969) and enter that URL.\(suffix)"
+            let suffix = details.isEmpty ? "" : " Tried: \(details.joined(separator: " · "))"
+            return "Could not get Apple sign-in data from any anisette source. Pick another anisette server under Provisioning, run AltServer on your Mac, or use this iPhone alone.\(suffix)"
         }
     }
 }
@@ -117,6 +120,9 @@ final class AltServerClient: ObservableObject {
     @Published private(set) var isSearching = false
     @Published private(set) var discoveryError: String?
     @Published private(set) var lastSource: AnisetteSource?
+    @Published private(set) var lastRemoteServerName: String?
+    @Published private(set) var isCheckingAnisette = false
+    @Published private(set) var anisetteCheckResult: String?
     @Published var selectedServerID: String?
 
     private var browser: NWBrowser?
@@ -128,7 +134,7 @@ final class AltServerClient: ObservableObject {
         isSearching = true
 
         let parameters = NWParameters.tcp
-        parameters.includePeerToPeer = false
+        parameters.includePeerToPeer = true
         let browser = NWBrowser(for: .bonjour(type: "_altserver._tcp", domain: nil), using: parameters)
         browser.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
@@ -174,23 +180,57 @@ final class AltServerClient: ObservableObject {
         isSearching = false
     }
 
-    func fetchAnisetteData(httpURL: URL? = nil) async throws -> [String: String] {
+    func fetchAnisetteData(plan: AnisettePreference.Plan) async throws -> [String: String] {
         var failures: [String] = []
 
-        if let onDevice = OnDeviceAnisette.json() {
-            lastSource = .thisDevice
-            return onDevice
+        // 1. A custom, user-run anisette server. An explicit choice is never
+        //    silently bypassed.
+        if let customURL = plan.customURL,
+           let custom = RemoteAnisetteServer(name: customURL.host ?? "Custom anisette server",
+                                             address: customURL.absoluteString) {
+            do {
+                let result = try await RemoteAnisetteClient.fetchAnisette(from: custom)
+                lastSource = .httpServer
+                lastRemoteServerName = result.serverName
+                return result.json
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                failures.append("\(custom.host): \(error.localizedDescription)")
+            }
         }
 
-        if let server = selectedServer {
+        // 2. Community anisette servers. This is what makes Apple Account
+        //    provisioning work without a Mac running AltServer.
+        for server in plan.remoteServers {
+            do {
+                let result = try await RemoteAnisetteClient.fetchAnisette(from: server)
+                lastSource = .remoteServer
+                lastRemoteServerName = result.serverName
+                return result.json
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                failures.append("\(server.name): \(error.localizedDescription)")
+            }
+        }
+
+        // 3. AltServer discovered over Bonjour on the local network.
+        if plan.useAltServer, let server = selectedServer {
             let connection = AltServerConnection(endpoint: server.endpoint)
             do {
                 let raw = try await connection.fetchAnisetteData()
-                if let json = AnisettePayload.json(from: raw) {
+                if let json = AnisettePayload.json(
+                    from: raw,
+                    clientDescription: AnisettePayload.clientDescription(forAltServerData: raw)
+                ) {
                     lastSource = .altServer
+                    lastRemoteServerName = nil
                     return json
                 }
                 failures.append("AltServer sent incomplete anisette data.")
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 failures.append(error.localizedDescription)
             }
@@ -198,33 +238,64 @@ final class AltServerClient: ObservableObject {
             if let host = connection.resolvedHost,
                let fallback = Self.httpURL(host: host, port: 6969) {
                 do {
-                    let json = try await AnisetteHTTPClient.fetch(from: fallback)
+                    let json = try await AnisetteHTTPClient.fetch(
+                        from: fallback,
+                        clientDescription: AnisettePayload.compatibilityClientDescription
+                    )
                     lastSource = .altServerHost
+                    lastRemoteServerName = nil
                     return json
+                } catch is CancellationError {
+                    throw CancellationError()
                 } catch {
-                    failures.append("No anisette HTTP server on \(host):6969.")
+                    failures.append("Anisette server on \(host):6969 failed: \(error.localizedDescription)")
                 }
             }
-        } else {
+        } else if plan.useAltServer {
             failures.append(AltServerClientError.noServer.localizedDescription)
         }
 
-        if let httpURL {
-            do {
-                let json = try await AnisetteHTTPClient.fetch(from: httpURL)
-                lastSource = .httpServer
-                return json
-            } catch {
-                failures.append(error.localizedDescription)
-            }
+        // 4. Last resort: this iPhone's own Apple sign-in data.
+        if plan.useThisDevice, let onDevice = OnDeviceAnisette.json() {
+            lastSource = .thisDevice
+            lastRemoteServerName = nil
+            return onDevice
         }
 
         lastSource = nil
+        lastRemoteServerName = nil
+        if failures.isEmpty { throw RemoteAnisetteError.noDataSource }
         throw AltServerClientError.allSourcesFailed(failures)
     }
 
-    var hasAnisetteSource: Bool {
-        selectedServer != nil || OnDeviceAnisette.isAvailable
+    /// Live check for the Provisioning section: fetches anisette data once and
+    /// reports which source answered. Never logs or shows secret values.
+    func checkAnisette(plan: AnisettePreference.Plan) async {
+        guard !isCheckingAnisette else { return }
+        isCheckingAnisette = true
+        anisetteCheckResult = nil
+        defer { isCheckingAnisette = false }
+
+        do {
+            _ = try await fetchAnisetteData(plan: plan)
+            let source = lastSource?.rawValue ?? "anisette source"
+            if let name = lastRemoteServerName, lastSource == .remoteServer || lastSource == .httpServer {
+                anisetteCheckResult = "Apple sign-in data received from \(name). Ready to sign in."
+            } else {
+                anisetteCheckResult = "Apple sign-in data received from \(source). Ready to sign in."
+            }
+        } catch is CancellationError {
+            anisetteCheckResult = "Check cancelled."
+        } catch {
+            anisetteCheckResult = error.localizedDescription
+        }
+    }
+
+    func hasAnisetteSource(plan: AnisettePreference.Plan) -> Bool {
+        plan.customURL != nil
+            || !plan.remoteServers.isEmpty
+            || (plan.useAltServer && selectedServer != nil)
+            || (plan.useThisDevice && OnDeviceAnisette.isAvailable)
     }
 
     private static func httpURL(host: String, port: Int) -> URL? {
@@ -247,7 +318,9 @@ private final class AltServerConnection: @unchecked Sendable {
     private(set) var resolvedHost: String?
 
     init(endpoint: NWEndpoint) {
-        connection = NWConnection(to: endpoint, using: .tcp)
+        let parameters = NWParameters.tcp
+        parameters.includePeerToPeer = true
+        connection = NWConnection(to: endpoint, using: parameters)
     }
 
     func fetchAnisetteData() async throws -> [String: String] {

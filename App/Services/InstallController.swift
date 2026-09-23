@@ -6,7 +6,14 @@ final class InstallController: ObservableObject {
     @Published var installServer: LocalInstallServer?
     @Published var installStatus = ""
 
-    var onDelivered: (() -> Void)?
+    /// Structured milestones for `InstallCoordinator`. Additive: the legacy
+    /// `installStatus` strings remain the source of truth for the existing UI,
+    /// and the OTA transport keeps behaving exactly as before.
+    var onProgress: ((InstallationProgress) -> Void)?
+
+    private func emit(_ phase: InstallationPhase, _ message: String, fraction: Double? = nil) {
+        onProgress?(InstallationProgress(phase: phase, message: message, fraction: fraction))
+    }
 
     private struct Operation {
         let id: UUID
@@ -14,6 +21,7 @@ final class InstallController: ObservableObject {
         var server: LocalInstallServer?
         var task: Task<Void, Never>?
         var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+        var transferFraction: Double = 0
         var delivered = false
     }
 
@@ -30,8 +38,9 @@ final class InstallController: ObservableObject {
             Task { @MainActor in
                 guard let self, self.operation?.id == id, self.operation?.delivered == false else { return }
                 InstallKeepAlive.shared.stop()
-                if self.installStatus.hasPrefix("Install prompted") {
-                    self.installStatus = "Back in ForgeSign. If no dialog appeared, try “Retry via Safari”."
+                if self.installStatus.hasPrefix("Waiting for iOS") {
+                    self.installStatus = "Waiting for iOS to request the IPA. If no install prompt appeared, try “Retry via Safari”."
+                    self.emit(.awaitingSystem, self.installStatus)
                 }
             }
         }
@@ -49,6 +58,7 @@ final class InstallController: ObservableObject {
         let id = UUID()
         var newOperation = Operation(id: id, recordID: recordID)
         installStatus = "Starting install server…"
+        emit(.preparingPackage, installStatus)
         observeForeground(for: id)
         newOperation.backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "forgesign.install") { [weak self] in
             Task { @MainActor in self?.cancelInstall(markFailed: true) }
@@ -73,17 +83,27 @@ final class InstallController: ObservableObject {
                 }
                 self.operation?.server = server
                 self.installServer = server
+                self.emit(.connecting, "Local install server ready.")
+                server.onIPAProgress = { [weak self] fraction in
+                    Task { @MainActor in
+                        guard let self, self.operation?.id == id, self.operation?.delivered == false else { return }
+                        guard fraction > (self.operation?.transferFraction ?? 0) else { return }
+                        self.operation?.transferFraction = fraction
+                        self.installStatus = "Sending IPA to iOS…"
+                        self.emit(.transferring(fraction), self.installStatus, fraction: fraction)
+                    }
+                }
                 server.onIPADelivered = { [weak self] in
                     Task { @MainActor in
                         guard let self, self.operation?.id == id, self.operation?.delivered == false else { return }
                         self.operation?.delivered = true
-                        self.installStatus = "IPA delivered. Installing… accept the iOS prompt if shown."
+                        self.installStatus = "IPA transferred to iOS. Check the Home Screen for install progress."
+                        self.emit(.delivered, self.installStatus)
                         if let recordID = self.operation?.recordID {
                             NotificationCenter.default.post(name: .forgeInstallState, object: nil,
                                                             userInfo: ["recordID": recordID, "state": SigningRecord.InstallState.delivered.rawValue])
                         }
-                        InstallKeepAlive.shared.stop()
-                        self.onDelivered?()
+                        self.finish(id: id, status: nil)
                     }
                 }
 
@@ -115,23 +135,21 @@ final class InstallController: ObservableObject {
                                   userInfo: [NSLocalizedDescriptionKey: "Bad itms-services URL."])
                 }
                 guard self.operation?.id == id else { return }
-                self.installStatus = "Triggering installer…"
+                self.installStatus = "Opening the iOS installer…"
+                self.emit(.awaitingSystem, self.installStatus)
                 UIApplication.shared.open(itmsURL) { [weak self] opened in
                     Task { @MainActor in
                         guard let self, self.operation?.id == id else { return }
                         if opened {
-                            self.installStatus = "Install prompted. Accept the iOS dialog; ForgeSign will move to the Home Screen."
-                            self.moveToHomeScreen(for: id)
+                            self.installStatus = "Waiting for iOS to request the IPA. Accept the install prompt if it appears."
+                            self.emit(.awaitingSystem, self.installStatus)
                         } else {
-                            self.installStatus = "Direct open gated — opening Safari install page…"
-                            if let page = URL(string: "\(server.installBaseURL)/install") {
-                                UIApplication.shared.open(page)
-                            }
+                            self.openInstallPage()
                         }
                     }
                 }
                 try await Task.sleep(nanoseconds: 30 * 60 * 1_000_000_000)
-                self.finish(id: id, status: nil)
+                self.finish(id: id, status: "Install failed: iOS did not download the IPA. Try again or use the Safari install page.")
             } catch is CancellationError {
                 self.finish(id: id, status: "Install cancelled.")
             } catch {
@@ -139,17 +157,6 @@ final class InstallController: ObservableObject {
             }
         }
         operation?.task = task
-    }
-
-    /// ForgeSign is distributed as a sideloaded utility, so after handing the
-    /// OTA request to SpringBoard it can background itself and reveal installation
-    /// progress on the Home Screen. The audio keep-alive remains active so the
-    /// loopback server can finish serving the IPA while ForgeSign is backgrounded.
-    private func moveToHomeScreen(for id: UUID) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            guard let self, self.operation?.id == id else { return }
-            UIApplication.shared.perform(NSSelectorFromString("suspend"))
-        }
     }
 
     func cancelInstall(markFailed: Bool = false) {
@@ -161,31 +168,44 @@ final class InstallController: ObservableObject {
 
     private func finish(id: UUID, status: String?) {
         guard let current = operation, current.id == id else { return }
+        current.task?.cancel()
         current.server?.stop()
         InstallKeepAlive.shared.stop()
         endObservation()
         if current.backgroundTask != .invalid {
             UIApplication.shared.endBackgroundTask(current.backgroundTask)
         }
-        if let status { installStatus = status }
+        if let status {
+            installStatus = status
+            if status.hasPrefix("Install failed") {
+                onProgress?(InstallationProgress(phase: .failed(status), message: status))
+            } else if status.hasPrefix("Install cancelled") {
+                onProgress?(InstallationProgress(phase: .cancelled, message: status))
+            }
+        }
         if let recordID = current.recordID, status?.hasPrefix("Install failed") == true {
             NotificationCenter.default.post(name: .forgeInstallState, object: nil,
                                             userInfo: ["recordID": recordID, "state": SigningRecord.InstallState.failed.rawValue])
         }
         installServer = nil
         operation = nil
-        onDelivered = nil
     }
 
     func openInstallPage() {
         guard let server = installServer else { return }
         guard let page = URL(string: "\(server.installBaseURL)/install") else { return }
-        installStatus = "Opening install page in Safari…"
-        UIApplication.shared.open(page)
+        installStatus = "Opening the Safari install page. Tap Install there to continue."
+        emit(.awaitingSystem, installStatus)
+        let id = operation?.id
+        UIApplication.shared.open(page) { [weak self] opened in
+            Task { @MainActor in
+                guard let self, let id, self.operation?.id == id, !opened else { return }
+                self.finish(id: id, status: "Install failed: Safari could not open the install page.")
+            }
+        }
     }
 }
 
 extension Notification.Name {
-    static let forgeInstallStarted = Notification.Name("ForgeSign.installStarted")
     static let forgeInstallState = Notification.Name("ForgeSign.installState")
 }

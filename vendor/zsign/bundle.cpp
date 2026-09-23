@@ -338,15 +338,38 @@ static bool IsAppExtensionPath(const string& strPath)
 	return (0 == strPath.rfind("PlugIns/", 0) || 0 == strPath.rfind("Extensions/", 0));
 }
 
-bool ZBundle::SignNode(jvalue& jvNode)
+bool ZBundle::SignNode(jvalue& jvNode, ZSignAsset* pDefaultAsset)
 {
+	string strFolder = jvNode["path"];
+	string strBundleId = jvNode["bundle_id"];
+	ZSignAsset* signAsset = pDefaultAsset;
+	if (m_pSignAssets && (strFolder == "/" || ZFile::IsPathSuffix(strFolder, ".app") ||
+		ZFile::IsPathSuffix(strFolder, ".appex"))) {
+		ZSignAsset* bestAsset = NULL;
+		bool bestExplicit = false;
+		for (auto it = m_pSignAssets->begin(); it != m_pSignAssets->end(); ++it) {
+			string pattern = ProfileBundlePattern(it->m_strApplicationId);
+			if (!ProfilePatternMatches(pattern, strBundleId)) continue;
+			bool explicitMatch = pattern == strBundleId;
+			if (!bestAsset || (explicitMatch && !bestExplicit)) {
+				bestAsset = &(*it);
+				bestExplicit = explicitMatch;
+			}
+		}
+		if (bestAsset) signAsset = bestAsset;
+		else if (strFolder != "/") {
+			m_strError = "No provisioning profile matches " + strBundleId + " (" + strFolder + "). Import a matching profile or use Apple Account provisioning.";
+			ZLog::ErrorV(">>> %s\n", m_strError.c_str());
+			return false;
+		}
+	}
 	if (jvNode.has("files")) {
 		for (size_t i = 0; i < jvNode["files"].size(); i++) {
 			string strFile = jvNode["files"][i];
 			ZLog::PrintV(">>> SignFile: \t%s\n", strFile.c_str());
 			ZMachO macho;
 			if (macho.InitV("%s/%s", m_strAppFolder.c_str(), strFile.c_str())) {
-				if (!macho.Sign(m_pSignAsset, m_bForceSign, "", "", "", "")) {
+				if (!macho.Sign(signAsset, m_bForceSign, "", "", "", "")) {
 					return false;
 				}
 			} else {
@@ -357,7 +380,7 @@ bool ZBundle::SignNode(jvalue& jvNode)
 	
 	if (jvNode.has("folders")) {
 		for (size_t i = 0; i < jvNode["folders"].size(); i++) {
-			if (!SignNode(jvNode["folders"][i])) {
+			if (!SignNode(jvNode["folders"][i], pDefaultAsset)) {
 				return false;
 			}
 		}
@@ -366,8 +389,6 @@ bool ZBundle::SignNode(jvalue& jvNode)
 	jbase64 b64;
 	string strInfoSHA1;
 	string strInfoSHA256;
-	string strFolder = jvNode["path"];
-	string strBundleId = jvNode["bundle_id"];
 	string strBundleExe = jvNode["bundle_executable"];
 	b64.decode(jvNode["sha1"].as_cstr(), strInfoSHA1);
 	b64.decode(jvNode["sha256"].as_cstr(), strInfoSHA256);
@@ -436,30 +457,10 @@ bool ZBundle::SignNode(jvalue& jvNode)
 	// generated: the seal hashes every file in the bundle, so a profile
 	// written after sealing leaves the bundle failing Apple's verifier with
 	// "a sealed resource is missing or invalid" (codesign --verify --strict).
-	if (m_pSignAssets) {
-		ZSignAsset* bestAsset = NULL;
-		bool bestExplicit = false;
-		for (auto it = m_pSignAssets->begin(); it != m_pSignAssets->end(); ++it) {
-			string pattern = ProfileBundlePattern(it->m_strApplicationId);
-			if (!ProfilePatternMatches(pattern, strBundleId)) continue;
-			bool explicitMatch = pattern == strBundleId;
-			if (!bestAsset || (explicitMatch && !bestExplicit)) {
-				bestAsset = &(*it);
-				bestExplicit = explicitMatch;
-			}
-		}
-		if (bestAsset) {
-			m_pSignAsset = bestAsset;
-			if (!ZFile::WriteFileV(m_pSignAsset->m_strProvData, "%s/%s/embedded.mobileprovision", m_strAppFolder.c_str(), strFolder.c_str())) {
-				ZLog::ErrorV(">>> Can't write embedded.mobileprovision!\n");
-				return false;
-			}
-			bForceSign = true;
-		} else if ("/" != strFolder && m_pSignAsset && !m_pSignAsset->m_strProvData.empty() &&
-				(strFolder.find("PlugIns/") == 0 || strFolder.find("Extensions/") == 0 ||
-				strFolder.find("Watch/") == 0 || strFolder.find("AppClips/") == 0)) {
-			ZLog::PrintV(">>> No dedicated profile for %s; using the app profile.\n", strBundleId.c_str());
-			if (!ZFile::WriteFileV(m_pSignAsset->m_strProvData, "%s/%s/embedded.mobileprovision", m_strAppFolder.c_str(), strFolder.c_str())) {
+	if (m_pSignAssets && (strFolder == "/" || ZFile::IsPathSuffix(strFolder, ".app") ||
+		ZFile::IsPathSuffix(strFolder, ".appex"))) {
+		if (signAsset && !signAsset->m_strProvData.empty()) {
+			if (!ZFile::WriteFileV(signAsset->m_strProvData, "%s/%s/embedded.mobileprovision", m_strAppFolder.c_str(), strFolder.c_str())) {
 				ZLog::ErrorV(">>> Can't write embedded.mobileprovision!\n");
 				return false;
 			}
@@ -512,7 +513,7 @@ bool ZBundle::SignNode(jvalue& jvNode)
 		return false;
 	}
 
-	if (!macho.Sign(m_pSignAsset, bForceSign, strBundleId, strInfoSHA1, strInfoSHA256, strCodeResData)) {
+	if (!macho.Sign(signAsset, bForceSign, strBundleId, strInfoSHA1, strInfoSHA256, strCodeResData)) {
 		return false;
 	}
 
@@ -797,14 +798,22 @@ bool ZBundle::ApplyProvisioningMetadata()
 			}
 		}
 		if (!bestAsset) {
-			if (bundlePath == m_strAppFolder || m_pSignAsset == NULL) {
+			if (bundlePath != m_strAppFolder) {
+				m_strError = "No provisioning profile matches " + bundleId + " (" +
+					bundlePath.substr(m_strAppFolder.size() + 1) + "). Import a matching profile or use Apple Account provisioning.";
+				ZLog::ErrorV(">>> %s\n", m_strError.c_str());
+				return false;
+			}
+			// Keep the v2.1 manual-signing behavior: the first supplied
+			// profile is the root fallback for an intentionally re-bundled app.
+			if (m_pSignAsset == NULL || m_pSignAsset->m_strProvData.empty()) {
 				m_strError = "No provisioning profile matches " + bundleId + " (" +
 					(bundlePath == m_strAppFolder ? string("main app") : bundlePath.substr(m_strAppFolder.size() + 1)) + ").";
 				ZLog::ErrorV(">>> %s\n", m_strError.c_str());
 				return false;
 			}
 			bestAsset = m_pSignAsset;
-			ZLog::PrintV(">>> No dedicated profile for %s; using the app profile.\n", bundleId.c_str());
+			ZLog::PrintV(">>> No matching profile for %s; using the selected app profile.\n", bundleId.c_str());
 		}
 		if (bundlePath == m_strAppFolder) m_pSignAsset = bestAsset;
 
@@ -1036,7 +1045,7 @@ bool ZBundle::SignFolder(ZSignAsset* pSignAsset,
 	ZLog::PrintV(">>> SubjectCN: \t%s\n", m_pSignAsset->m_strSubjectCN.c_str());
 	ZLog::PrintV(">>> ReadCache: \t%s\n", m_bForceSign ? "NO" : "YES");
 
-	if (SignNode(jvRoot)) {
+	if (SignNode(jvRoot, m_pSignAsset)) {
 		if (bEnableCache) {
 			ZFile::CreateFolder("./.zsign_cache");
 			jvRoot.style_write_to_file("./.zsign_cache/%s.json", strCacheName.c_str());

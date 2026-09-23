@@ -136,9 +136,6 @@ struct SourcesView: View {
                 if let count = store.catalog[repo.id]?.apps.count {
                     GlassStatusPill(text: "\(count) apps", color: T.accent)
                 }
-                if repo.url.scheme?.lowercased() == "http" {
-                    GlassStatusPill(text: "HTTP", color: T.warn)
-                }
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(T.ink4)

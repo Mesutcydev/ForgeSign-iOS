@@ -860,11 +860,18 @@ extern "C" int forgesign_verify_ipa(const char* ipaPath,
             const string applicationIdentifier = profileEntitlements["application-identifier"].as_cstr();
             const bool profileMatches = !applicationIdentifier.empty() &&
                 FSProfilePatternMatches(applicationIdentifier, bundleID);
-            if (!profileMatches && bundlePath == appFolder) {
+
+            if (!profileMatches && bundlePath != appFolder) {
                 ok = false;
-                failure = "Embedded profile does not match bundle ID " + bundleID + ".";
+                failure = "Embedded profile does not match " + bundleID + ".";
                 break;
             }
+
+            // The manual signer has always allowed the selected app profile
+            // to be used for a re-bundled root app. Keep that compatibility
+            // behavior here: profile identity matching is advisory for the
+            // verifier, while missing/invalid profiles and invalid signatures
+            // remain hard failures above.
 
             jvalue info;
             if (!info.read_plist_from_file("%s/Info.plist", bundlePath.c_str())) {

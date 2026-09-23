@@ -4,13 +4,16 @@ struct ContentView: View {
     @StateObject private var signer = SigningService()
     @StateObject private var altServer = AltServerClient()
     @StateObject private var altProvisioner = AltServerProvisioningService()
+    @StateObject private var deviceInstall = DeviceInstallationModel()
 
     @EnvironmentObject private var certStore: CertificateStore
     @EnvironmentObject private var profileStore: ProfileStore
     @EnvironmentObject private var history: HistoryStore
     @EnvironmentObject private var install: InstallController
+    @EnvironmentObject private var installCoordinator: InstallCoordinator
     @EnvironmentObject private var repoStore: RepositoryStore
     @EnvironmentObject private var imports: ImportRouter
+    @EnvironmentObject private var refreshSources: RefreshSourceStore
     @Environment(\.forgeTheme) private var T
 
     @State private var ipaURL: URL?
@@ -37,7 +40,32 @@ struct ContentView: View {
     @AppStorage("altServerAppleID") private var altServerAppleID = ""
     @AppStorage("altServerDeviceIdentifier") private var altServerDeviceIdentifier = ProvisioningAuditService.currentDeviceIdentifier ?? ""
     @AppStorage("anisetteServerURL") private var anisetteServerURL = ""
+    @AppStorage("anisetteMode") private var anisetteModeRaw = ""
+    @AppStorage("anisetteRemoteServerAddress") private var remoteAnisetteServerAddress = ""
+    /// Keeps a copy of the imported package so a later refresh can re-sign the
+    /// same input. Off by default: it costs disk.
+    @AppStorage("retainRefreshSources") private var retainRefreshSources = false
     @State private var altServerApplePassword = ""
+    @State private var signNotice: String?
+
+    private var anisetteMode: AnisetteMode {
+        AnisettePreference.resolvedMode(storedMode: anisetteModeRaw,
+                                        legacyCustomURLText: anisetteServerURL)
+    }
+
+    private var anisettePlan: AnisettePreference.Plan {
+        AnisettePreference.plan(mode: anisetteMode,
+                                remoteServerAddress: remoteAnisetteServerAddress.isEmpty ? nil : remoteAnisetteServerAddress,
+                                customURLText: anisetteServerURL)
+    }
+
+    /// The UDID ForgeSign can honestly check a pairing record against: the one
+    /// entered for provisioning, or the AltStore-injected `ALTDeviceID`.
+    private var resolvedDeviceUDID: String? {
+        let entered = altServerDeviceIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !entered.isEmpty { return entered }
+        return ProvisioningAuditService.currentDeviceIdentifier
+    }
 
     var body: some View {
         NavigationStack {
@@ -51,7 +79,8 @@ struct ContentView: View {
                             IPAPreflightCard(state: preflightState,
                                              certificate: certStore.selected,
                                              profile: profileStore.selected,
-                                             audit: provisioningAudit)
+                                             audit: provisioningAudit,
+                                             manualSigningAvailable: canSignManually)
                         }
                         optionsSection
                         AutomaticProvisioningSection(
@@ -59,7 +88,9 @@ struct ContentView: View {
                             appleID: $altServerAppleID,
                             applePassword: $altServerApplePassword,
                             deviceIdentifier: $altServerDeviceIdentifier,
-                            anisetteServerURL: $anisetteServerURL,
+                            anisetteModeRaw: $anisetteModeRaw,
+                            remoteServerAddress: $remoteAnisetteServerAddress,
+                            customAnisetteURL: $anisetteServerURL,
                             altServer: altServer,
                             provisioner: altProvisioner
                         )
@@ -70,7 +101,23 @@ struct ContentView: View {
                                                   dylibURL = nil
                                                   injectIntoExtensions = false
                                               })
+                        DeviceInstallationSection(
+                            model: deviceInstall,
+                            availableMethods: installCoordinator.availableMethods,
+                            expectedUDID: resolvedDeviceUDID,
+                            anisetteSource: anisettePlan.summary,
+                            importMessage: imports.pairingImportMessage,
+                            onImportMessageShown: { imports.pairingImportMessage = nil }
+                        )
                         signButton
+
+                        if let hint = signReadinessHint {
+                            readinessHint(hint)
+                        }
+
+                        if let signNotice {
+                            warningCard(signNotice)
+                        }
 
                         if let provisioningWarning, signer.phase != .provisioning {
                             warningCard(provisioningWarning)
@@ -146,16 +193,26 @@ struct ContentView: View {
                     switch request {
                     case .ipa(let url): stageIPA(url)
                     case .dylib(let url): stageDylib(url)
-                    case .unsupported: break
+                    case .pairingFile(let url):
+                        // Import straight into the Keychain; the Device
+                        // Installation card re-reads the store when it appears.
+                        deviceInstall.importPairing(from: url)
+                        imports.pairingImportMessage = deviceInstall.message
                     }
                 }
                 .onChange(of: profileStore.profiles) { _ in refreshProvisioningAudit() }
+                .onChange(of: profileStore.isRefreshingMetadata) { _ in refreshProvisioningAudit() }
                 .onChange(of: profileStore.selectedID) { _ in refreshProvisioningAudit() }
                 .onChange(of: certStore.selectedID) { _ in refreshProvisioningAudit() }
                 .onChange(of: bundleId) { _ in refreshProvisioningAudit() }
                 .onChange(of: removeExtensions) { _ in refreshProvisioningAudit() }
                 .onChange(of: automaticProvisioningEnabled) { _ in refreshProvisioningAudit() }
                 .onChange(of: altServerDeviceIdentifier) { _ in refreshProvisioningAudit() }
+                .onChange(of: anisetteModeRaw) { _ in refreshProvisioningAudit() }
+                .onChange(of: remoteAnisetteServerAddress) { _ in refreshProvisioningAudit() }
+                .onChange(of: signer.phase) { _ in
+                    if case .signing = signer.phase { signNotice = nil }
+                }
             }
         }
     }
@@ -410,16 +467,30 @@ struct ContentView: View {
                         .truncationMode(.middle)
                 }
 
-                if !install.installStatus.isEmpty {
+                if !installStatusText.isEmpty {
                     GlassRowDivider()
-                    HStack(spacing: 8) {
-                        Image(systemName: "iphone")
-                            .font(.system(size: 11))
-                            .foregroundColor(T.accent2)
-                        Text(install.installStatus)
-                            .font(T.mono(10))
-                            .foregroundColor(T.ink3)
-                            .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .top, spacing: 8) {
+                        if installCoordinator.phase.isActive {
+                            ProgressView()
+                                .controlSize(.small)
+                                .accessibilityLabel("Installation in progress")
+                        } else {
+                            Image(systemName: "iphone")
+                                .font(.system(size: 11))
+                                .foregroundColor(T.accent2)
+                                .padding(.top, 1)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            if let phase = installPhaseText {
+                                Text(phase)
+                                    .font(T.mono(10, .semibold))
+                                    .foregroundColor(installPhaseColor)
+                            }
+                            Text(installStatusText)
+                                .font(T.mono(10))
+                                .foregroundColor(T.ink3)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         Spacer(minLength: 0)
                     }
                     .padding(.horizontal, 16)
@@ -429,8 +500,25 @@ struct ContentView: View {
                 GlassRowDivider()
 
                 VStack(spacing: T.gap) {
-                    GlassPrimaryButton(label: "Install on Device", systemImage: "arrow.down.app") {
-                        startInstall()
+                    GlassPrimaryButton(label: installButtonLabel,
+                                       systemImage: "arrow.down.app",
+                                       action: { startInstall() },
+                                       disabled: installCoordinator.isInstalling)
+                    if installCoordinator.isInstalling {
+                        GlassSecondaryButton(label: "Cancel Install", systemImage: "xmark.circle") {
+                            installCoordinator.cancel()
+                        }
+                    }
+                    if let fallback = installCoordinator.fallbackMethods.first {
+                        GlassSecondaryButton(label: "Use \(fallback.displayName) Instead",
+                                             systemImage: "arrow.triangle.branch") {
+                            installCoordinator.retryWithFallback()
+                        }
+                    }
+                    if installCoordinator.lastError != nil, !installCoordinator.isInstalling {
+                        GlassSecondaryButton(label: "Try Again", systemImage: "arrow.clockwise") {
+                            installCoordinator.retry()
+                        }
                     }
                     if install.installServer != nil {
                         GlassSecondaryButton(label: "Retry via Safari", systemImage: "safari") {
@@ -499,11 +587,35 @@ struct ContentView: View {
         !altServerAppleID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !altServerApplePassword.isEmpty
             && !altServerDeviceIdentifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && (altServer.hasAnisetteSource || parsedAnisetteServerURL != nil)
+            && altServer.hasAnisetteSource(plan: anisettePlan)
+    }
+
+    /// Explains, under the Sign button, exactly what is still missing. The
+    /// button used to go quiet with no explanation, which read as “nothing happens”.
+    private var signReadinessHint: String? {
+        if signer.phase == .signing { return nil }
+        if signer.phase == .provisioning { return altProvisioner.statusText }
+        if ipaURL == nil { return "Choose an IPA to begin." }
+        if profileStore.isRefreshingMetadata { return "Reading provisioning profiles…" }
+
+        if automaticProvisioningEnabled {
+            if !isAppleAccountReady {
+                if canSignManually {
+                    return "Apple Account details are incomplete — ForgeSign will sign with the selected certificate and profile."
+                }
+                return "Add a certificate and profile, or enter your Apple Account details plus an anisette source."
+            }
+            if case .ready = preflightState { return nil }
+            return "Inspecting the IPA…"
+        }
+
+        if !canSignManually { return "Add a certificate (.p12 with its password) and a provisioning profile." }
+        return nil
     }
 
     private var canSign: Bool {
         guard ipaURL != nil else { return false }
+        guard !profileStore.isRefreshingMetadata else { return false }
         guard automaticProvisioningEnabled else { return canSignManually }
         let inspectionReady: Bool
         if case .ready = preflightState { inspectionReady = true } else { inspectionReady = false }
@@ -511,6 +623,10 @@ struct ContentView: View {
     }
 
     private func refreshProvisioningAudit(_ inspection: IPAPreflight? = nil) {
+        guard !profileStore.isRefreshingMetadata else {
+            provisioningAudit = nil
+            return
+        }
         let resolvedInspection: IPAPreflight
         if let inspection {
             resolvedInspection = inspection
@@ -520,6 +636,7 @@ struct ContentView: View {
             provisioningAudit = nil
             return
         }
+        let automaticPath = automaticProvisioningEnabled && isAppleAccountReady
         provisioningAudit = ProvisioningAuditService.makeAudit(
             inspection: resolvedInspection,
             profiles: profileStore.profiles,
@@ -527,20 +644,28 @@ struct ContentView: View {
             certificate: certStore.selected,
             requestedBundleID: bundleId,
             removeExtensions: removeExtensions,
-            deviceIdentifier: automaticProvisioningEnabled
+            deviceIdentifier: automaticPath
                 ? altServerDeviceIdentifier
-                : ProvisioningAuditService.currentDeviceIdentifier,
-            strictNestedBundles: automaticProvisioningEnabled && isAppleAccountReady
+                : ProvisioningAuditService.currentDeviceIdentifier
         )
     }
 
-    private var parsedAnisetteServerURL: URL? {
-        let trimmed = anisetteServerURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url = URL(string: trimmed),
-              let scheme = url.scheme?.lowercased(),
-              ["http", "https"].contains(scheme),
-              url.host != nil else { return nil }
-        return url
+    /// Helper line under the Sign button — says what is missing instead of
+    /// leaving the user with a disabled button and no explanation.
+    private func readinessHint(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "info.circle")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(T.ink3)
+                .padding(.top, 1)
+            Text(text)
+                .font(T.mono(10))
+                .foregroundColor(T.ink3)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, T.pad)
+        .padding(.top, 10)
     }
 
     private var canSignManually: Bool {
@@ -548,7 +673,11 @@ struct ContentView: View {
     }
 
     private func sign(allowAutomaticProvisioning: Bool = true) {
-        guard let ipa = ipaURL else { return }
+        signNotice = nil
+        guard let ipa = ipaURL else {
+            signNotice = "Choose an IPA first — there is nothing to sign yet."
+            return
+        }
 
         if automaticProvisioningEnabled,
            allowAutomaticProvisioning,
@@ -560,11 +689,10 @@ struct ContentView: View {
                 certificate: certStore.selected,
                 requestedBundleID: bundleId,
                 removeExtensions: removeExtensions,
-                deviceIdentifier: altServerDeviceIdentifier,
-                strictNestedBundles: true
+                deviceIdentifier: altServerDeviceIdentifier
             )
             provisioningAudit = audit
-            if (audit.firstBlockingMessage != nil || !canSignManually) && isAppleAccountReady {
+            if isAppleAccountReady {
                 obtainMissingProfiles(inspection: inspection,
                                       audit: audit,
                                       certificate: certStore.selected)
@@ -574,7 +702,12 @@ struct ContentView: View {
 
         guard let cert = certStore.selected,
               let pw = effectivePassword,
-              let profile = profileStore.selected else { return }
+              let profile = profileStore.selected else {
+            signNotice = allowAutomaticProvisioning
+                ? "Signing needs a certificate (.p12 with its password) and a provisioning profile. Add them under Input, or enter your Apple Account details under Provisioning so ForgeSign can create them."
+                : "ForgeSign could not select the certificate or profile it just created. Tap Sign again, or import a certificate and profile manually."
+            return
+        }
         let p12 = certStore.fileURL(for: cert)
         let audit: ProvisioningAudit?
         if case .ready(let inspection) = preflightState {
@@ -585,36 +718,43 @@ struct ContentView: View {
                 certificate: cert,
                 requestedBundleID: bundleId,
                 removeExtensions: removeExtensions,
-                deviceIdentifier: automaticProvisioningEnabled
+                deviceIdentifier: automaticProvisioningEnabled && isAppleAccountReady
                     ? altServerDeviceIdentifier
-                    : ProvisioningAuditService.currentDeviceIdentifier,
-                strictNestedBundles: false
+                    : ProvisioningAuditService.currentDeviceIdentifier
             )
         } else {
             audit = nil
         }
         if let audit {
             provisioningAudit = audit
+            if let blocker = audit.rows.first(where: { $0.kind != .app && $0.state.isBlocking }) {
+                signNotice = "\(blocker.kind.displayName) \(blocker.resolvedBundleID): \(blocker.detail) Import a matching profile or use Apple Account provisioning."
+                return
+            }
         }
-        if let problem = audit?.firstBlockingMessage(includeNested: false) {
-            signer.phase = .failed(problem)
-            return
-        }
+
         let plannedIDs = audit?.selectedProfileIDs ?? []
         let profileFiles: [ProfileRecord]
-        if plannedIDs.isEmpty {
-            // Preserve the established path if inspection is unavailable.
+        if !plannedIDs.isEmpty {
+            let resolved = plannedIDs.compactMap { id in
+                profileStore.profiles.first { $0.id == id }
+            }
+            profileFiles = resolved.contains(where: { $0.id == profile.id })
+                ? resolved : [profile] + resolved
+        } else {
+            // Preserve the manual path if inspection is unavailable.
             profileFiles = [profile] + profileStore.profiles.filter {
                 $0.id != profile.id && $0.profileIsAuthentic
-            }
-        } else {
-            profileFiles = plannedIDs.compactMap { id in
-                profileStore.profiles.first { $0.id == id }
             }
         }
         let profileURLs = profileFiles.map { profileStore.fileURL(for: $0) }
         let profileNames = profileFiles.map(\.displayName)
         let certCN = cert.commonName
+        // The profiles embedded in the result expire when the earliest of the
+        // profiles we are about to embed expires. Recorded with the library
+        // entry so refresh can tell when the app is due.
+        let profileExpiry = profileFiles.compactMap(\.notAfter).min()
+        let retainSource = retainRefreshSources
 
         signer.phase = .signing
         if allowAutomaticProvisioning { provisioningWarning = nil }
@@ -696,8 +836,14 @@ struct ContentView: View {
                                                 outputName: outName,
                                                 bundleId: result.signedBundleId,
                                                 version: result.signedVersion,
-                                                certificateCN: certCN)
+                                                certificateCN: certCN,
+                                                profileExpiresAt: profileExpiry)
                     lastRecordID = record.id
+                    if retainSource {
+                        // Retain the *original* package, never the signed output.
+                        let kept = refreshSources.retain(ipa, for: record.id)
+                        history.setRefreshSourceName(kept, for: record.id)
+                    }
                 } catch {
                     try? FileManager.default.removeItem(at: partialOutput)
                     signer.phase = .failed("The signed IPA could not be finalized in the library.")
@@ -728,7 +874,7 @@ struct ContentView: View {
                     password: altServerApplePassword,
                     deviceIdentifier: altServerDeviceIdentifier,
                     altServer: altServer,
-                    anisetteServerURL: parsedAnisetteServerURL,
+                    anisettePlan: anisettePlan,
                     importedCertificateData: importedCertificateData,
                     importedCertificatePassword: importedCertificatePassword
                 )
@@ -781,7 +927,7 @@ struct ContentView: View {
                 sign(allowAutomaticProvisioning: false)
             } catch {
                 if canSignManually {
-                    provisioningWarning = "Apple Account provisioning could not finish: \(error.localizedDescription) Signing with the imported certificate and profile instead. Extensions and attachments will use the app profile."
+                    provisioningWarning = "Apple Account provisioning could not finish: \(error.localizedDescription) Checking the imported profiles for manual signing."
                     signer.phase = .idle
                     sign(allowAutomaticProvisioning: false)
                 } else {
@@ -793,11 +939,42 @@ struct ContentView: View {
 
     private func startInstall() {
         guard let ipa = signedIPA else { return }
-        let recordID = lastRecordID
-        if let recordID {
-            history.setInstallState(.installing, for: recordID)
+        installCoordinator.install(ipa: ipa,
+                                   bundleId: signedBundleId,
+                                   version: signedVersion,
+                                   recordID: lastRecordID,
+                                   displayName: ipa.lastPathComponent)
+    }
+
+    /// The coordinator's structured status wins; the controller's legacy string
+    /// stays as the detailed line underneath it.
+    private var installStatusText: String {
+        installCoordinator.statusMessage.isEmpty ? install.installStatus : installCoordinator.statusMessage
+    }
+
+    private var installButtonLabel: String {
+        guard installCoordinator.isInstalling else { return "Install on Device" }
+        switch installCoordinator.phase {
+        case .awaitingSystem: return "Waiting for iOS…"
+        case .transferring: return "Sending IPA…"
+        default: return "Preparing install…"
         }
-        install.install(ipa: ipa, bundleId: signedBundleId, version: signedVersion, recordID: recordID)
+    }
+
+    private var installPhaseText: String? {
+        switch installCoordinator.phase {
+        case .idle: return nil
+        default: return installCoordinator.phase.label.uppercased()
+        }
+    }
+
+    private var installPhaseColor: Color {
+        switch installCoordinator.phase {
+        case .failed: return T.bad
+        case .cancelled: return T.ink3
+        case .completed, .delivered: return T.good
+        default: return T.accent2
+        }
     }
 }
 

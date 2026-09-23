@@ -7,6 +7,7 @@ struct IPAPreflightCard: View {
     let certificate: CertificateRecord?
     let profile: ProfileRecord?
     let audit: ProvisioningAudit?
+    let manualSigningAvailable: Bool
 
     @Environment(\.forgeTheme) private var T
 
@@ -53,8 +54,8 @@ struct IPAPreflightCard: View {
                             .foregroundColor(T.ink3)
                     }
                     Spacer(minLength: 8)
-                    GlassStatusPill(text: audit?.isReady == false ? "action needed" : "ready",
-                                    color: audit?.isReady == false ? T.warn : T.good)
+                    GlassStatusPill(text: auditStatusText,
+                                    color: auditStatusColor)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
@@ -103,17 +104,35 @@ struct IPAPreflightCard: View {
 
                 if let audit {
                     GlassRowDivider()
-                    ProvisioningAuditRows(rows: audit.rows)
+                    ProvisioningAuditRows(rows: audit.rows,
+                                          manualFallback: manualSigningAvailable)
                 }
 
                 MonoText(text: audit == nil
                          ? "Checking imported profiles…"
-                         : "Matching profiles are used when available. Bundles without a dedicated profile use the app profile.",
+                         : "Each extension and nested app needs a matching profile. A wildcard profile can cover multiple bundle IDs.",
                          size: 9, color: T.ink4)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 11)
             }
+        }
+    }
+
+    private var auditStatusText: String {
+        guard audit?.isReady == false else { return "ready" }
+        return rootManualFallbackAvailable ? "manual fallback" : "action needed"
+    }
+
+    private var auditStatusColor: Color {
+        guard audit?.isReady == false else { return T.good }
+        return rootManualFallbackAvailable ? T.warn : T.bad
+    }
+
+    private var rootManualFallbackAvailable: Bool {
+        guard manualSigningAvailable, let audit else { return false }
+        return audit.rows.filter(\.state.isBlocking).allSatisfy {
+            $0.kind == .app && $0.state == .missingProfile
         }
     }
 
@@ -179,11 +198,12 @@ struct IPAPreflightCard: View {
 
 private struct ProvisioningAuditRows: View {
     let rows: [ProvisioningAuditRow]
+    let manualFallback: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach(rows) { row in
-                ProvisioningAuditRowView(row: row)
+                ProvisioningAuditRowView(row: row, manualFallback: manualFallback)
                 if row.id != rows.last?.id {
                     GlassRowDivider()
                 }
@@ -194,6 +214,7 @@ private struct ProvisioningAuditRows: View {
 
 private struct ProvisioningAuditRowView: View {
     let row: ProvisioningAuditRow
+    let manualFallback: Bool
 
     @Environment(\.forgeTheme) private var T
 
@@ -216,7 +237,7 @@ private struct ProvisioningAuditRowView: View {
                     .foregroundColor(T.ink2)
                     .lineLimit(2)
                     .truncationMode(.middle)
-                Text(row.detail)
+                Text(detailText)
                     .font(T.mono(9))
                     .foregroundColor(T.ink3)
                     .fixedSize(horizontal: false, vertical: true)
@@ -242,6 +263,9 @@ private struct ProvisioningAuditRowView: View {
     }
 
     private var color: Color {
+        if manualFallback && row.kind == .app && row.state == .missingProfile {
+            return T.warn
+        }
         switch row.state {
         case .ready: return T.good
         case .warning, .removed: return T.warn
@@ -250,6 +274,9 @@ private struct ProvisioningAuditRowView: View {
     }
 
     private var statusText: String {
+        if manualFallback && row.kind == .app && row.state == .missingProfile {
+            return "manual fallback"
+        }
         switch row.state {
         case .ready: return "ready"
         case .warning: return "check device"
@@ -261,5 +288,12 @@ private struct ProvisioningAuditRowView: View {
         case .deviceMismatch: return "wrong device"
         case .missingAppGroups: return "missing groups"
         }
+    }
+
+    private var detailText: String {
+        if manualFallback && row.kind == .app && row.state == .missingProfile {
+            return "No exact application-ID match; the selected imported profile will be supplied to manual signing."
+        }
+        return row.detail
     }
 }

@@ -8,12 +8,41 @@ enum AnisetteSource: String, Equatable, Sendable {
     case altServer = "AltServer"
     case altServerHost = "Anisette server on the AltServer Mac"
     case httpServer = "Anisette server"
+    case remoteServer = "Remote anisette server"
 }
 
 enum AnisettePayload {
     static let defaultRoutingInfo = "17106176"
+    private static let compatibleXcodeBuild = "25183.54.10"
 
-    static func json(from raw: [String: String]) -> [String: String]? {
+    // Apple currently expects the client-info, macOS version, and Xcode
+    // version to describe one coherent client. Older AltServer/anisette
+    // servers can still return the Xcode 11/macOS 13 identity, which iOS 27
+    // rejects during the GrandSlam handshake.
+    static let compatibilityClientDescription =
+        "<Mac15,7> <macOS;27.0;26A5378j> <com.apple.AuthKit/1 (com.apple.dt.Xcode/25183.54.10)>"
+
+    /// AltServer knows the actual Mac model and OS build. Keep those values
+    /// together and update only its obsolete Xcode identity. A legacy server
+    /// reporting an older macOS cannot represent this Xcode, so use the known
+    /// coherent fallback in that case.
+    static func clientDescription(forAltServerData raw: [String: String]) -> String {
+        guard let description = firstValue(in: raw, keys: "deviceDescription", "X-MMe-Client-Info"),
+              let osRange = description.range(of: #"^<[^<>]+> <macOS;(\d+)(?:\.[^;<>]+)?;[^<>]+> <com\.apple\.AuthKit/1 \(com\.apple\.dt\.Xcode/[0-9.]+\)>$"#,
+                                                  options: .regularExpression),
+              osRange.lowerBound == description.startIndex,
+              let versionRange = description.range(of: #"(?<=<macOS;)\d+"#, options: .regularExpression),
+              let majorVersion = Int(description[versionRange]), majorVersion >= 26,
+              let xcodeRange = description.range(of: #"(?<=com\.apple\.dt\.Xcode/)[0-9.]+"#,
+                                                      options: .regularExpression) else {
+            return compatibilityClientDescription
+        }
+        var updated = description
+        updated.replaceSubrange(xcodeRange, with: compatibleXcodeBuild)
+        return updated
+    }
+
+    static func json(from raw: [String: String], clientDescription: String? = nil) -> [String: String]? {
         let machineID = firstValue(in: raw, keys: "machineID", "X-Apple-I-MD-M", "X-Apple-MD-M")
         let otp = firstValue(in: raw, keys: "oneTimePassword", "X-Apple-I-MD", "X-Apple-MD")
         guard let machineID, let otp else { return nil }
@@ -25,8 +54,10 @@ enum AnisettePayload {
         let deviceID = firstValue(in: raw, keys: "deviceUniqueIdentifier", "X-Mme-Device-Id", "X-Mme-Device-ID")
             ?? persistentDeviceIdentifier()
         let serial = firstValue(in: raw, keys: "deviceSerialNumber", "X-Apple-I-SRL-NO") ?? "0"
-        let description = firstValue(in: raw, keys: "deviceDescription", "X-MMe-Client-Info", "X-Mme-Client-Info")
-            ?? defaultDeviceDescription
+        let override = clientDescription?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let description = (override?.isEmpty == false ? override : nil)
+            ?? firstValue(in: raw, keys: "deviceDescription", "X-MMe-Client-Info", "X-Mme-Client-Info")
+            ?? compatibilityClientDescription
         let date = firstValue(in: raw, keys: "date", "X-Apple-I-Client-Time")
             ?? ISO8601DateFormatter().string(from: Date())
         let locale = firstValue(in: raw, keys: "locale", "X-Apple-Locale", "X-Apple-I-Locale")
@@ -62,9 +93,6 @@ enum AnisettePayload {
         }
         return result
     }
-
-    private static let defaultDeviceDescription =
-        "<MacBookPro18,3> <macOS;13.4.1;22F82> <com.apple.AuthKit/1 (com.apple.dt.Xcode/3594.4.19)>"
 
     private static func firstValue(in raw: [String: String], keys: String...) -> String? {
         for key in keys {
@@ -103,11 +131,11 @@ enum AnisettePayload {
 }
 
 enum OnDeviceAnisette {
-    static var isAvailable: Bool {
+    static let isAvailable: Bool = {
         loadAuthKit()
         return NSClassFromString("AKAppleIDSession") != nil
             && NSClassFromString("AKDevice") != nil
-    }
+    }()
 
     static func json() -> [String: String]? {
         loadAuthKit()
@@ -124,7 +152,10 @@ enum OnDeviceAnisette {
 
         let headerSelector = NSSelectorFromString("appleIDHeadersForRequest:")
         guard session.responds(to: headerSelector) else { return nil }
-        let request = NSURLRequest(url: URL(string: "https://developerservices2.apple.com/")!)
+        guard let requestURL = URL(string: "https://developerservices2.apple.com/") else {
+            return nil
+        }
+        let request = NSURLRequest(url: requestURL)
         guard let headers = session.perform(headerSelector, with: request)?
             .takeUnretainedValue() as? [AnyHashable: Any] else { return nil }
 
@@ -133,12 +164,16 @@ enum OnDeviceAnisette {
               let device = (deviceClass as AnyObject).perform(currentSelector)?
                 .takeUnretainedValue() as? NSObject else { return nil }
 
-        var raw = AnisettePayload.stringify(Dictionary(
-            uniqueKeysWithValues: headers.compactMap { key, value in
-                guard let name = key as? String else { return nil }
-                return (name, value)
-            }
-        ))
+        // Do not use Dictionary(uniqueKeysWithValues:) here. AuthKit may
+        // expose equivalent header keys with different casing/types; that
+        // initializer traps on a collision and would terminate ForgeSign
+        // while the AltServer flow is starting.
+        var rawHeaders: [String: Any] = [:]
+        for (key, value) in headers {
+            guard let name = key as? String else { continue }
+            rawHeaders[name] = value
+        }
+        var raw = AnisettePayload.stringify(rawHeaders)
         if let deviceID = string(from: device, selector: "uniqueDeviceIdentifier") {
             raw["deviceUniqueIdentifier"] = deviceID
         }
@@ -169,27 +204,35 @@ enum OnDeviceAnisette {
 }
 
 enum AnisetteHTTPClient {
-    static func fetch(from url: URL) async throws -> [String: String] {
+    static func fetch(from url: URL, clientDescription: String? = nil) async throws -> [String: String] {
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         let (data, response) = try await URLSession.shared.data(for: request)
 
+        guard let http = response as? HTTPURLResponse else {
+            throw AltServerClientError.invalidResponse
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw AltServerClientError.httpStatus(http.statusCode)
+        }
+
         if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let json = AnisettePayload.json(from: AnisettePayload.stringify(object)) {
+           let json = AnisettePayload.json(
+               from: AnisettePayload.stringify(object),
+               clientDescription: clientDescription
+           ) {
             return json
         }
 
-        if let http = response as? HTTPURLResponse {
-            var raw: [String: String] = [:]
-            for (key, value) in http.allHeaderFields {
-                if let name = key as? String, let string = value as? String {
-                    raw[name] = string
-                }
+        var raw: [String: String] = [:]
+        for (key, value) in http.allHeaderFields {
+            if let name = key as? String, let string = value as? String {
+                raw[name] = string
             }
-            if let json = AnisettePayload.json(from: raw) {
-                return json
-            }
+        }
+        if let json = AnisettePayload.json(from: raw, clientDescription: clientDescription) {
+            return json
         }
 
         throw AltServerClientError.invalidResponse

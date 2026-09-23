@@ -1,6 +1,26 @@
 import Foundation
 
 enum NetworkPolicy {
+    private final class HTTPSRedirectValidator: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession,
+                        task: URLSessionTask,
+                        willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest,
+                        completionHandler: @escaping (URLRequest?) -> Void) {
+            guard let url = request.url, validateHTTPS(url) else {
+                completionHandler(nil)
+                return
+            }
+            completionHandler(request)
+        }
+    }
+
+    static func makeValidatedSession() -> URLSession {
+        URLSession(configuration: .ephemeral,
+                   delegate: HTTPSRedirectValidator(),
+                   delegateQueue: nil)
+    }
+
     static func validateHTTPS(_ url: URL) -> Bool {
         guard url.scheme?.lowercased() == "https",
               let host = url.host,

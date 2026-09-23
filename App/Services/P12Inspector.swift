@@ -7,7 +7,6 @@ struct P12Info {
     let commonName: String?
     let organization: String?
     let teamID: String?
-    let notBefore: Date?
     let notAfter: Date?
     let certificateSHA256: String?
 }
@@ -63,7 +62,6 @@ enum P12Inspector {
         return P12Info(commonName: string(cnBuf),
                        organization: string(oBuf),
                        teamID: string(ouBuf),
-                       notBefore: nil,
                        notAfter: notAfter > 0 ? Date(timeIntervalSince1970: TimeInterval(notAfter)) : nil,
                        certificateSHA256: string(fingerprintBuf))
     }
@@ -78,7 +76,12 @@ enum P12Inspector {
               let entry = list.first,
               let identityValue = entry[kSecImportItemIdentity as String]
         else { return nil }
-        let identity = identityValue as! SecIdentity
+        // SecIdentity is an imported Core Foundation type. Validate its CF
+        // type ID before passing the opaque reference to Security.framework;
+        // Swift cannot express a useful conditional cast for this CF type.
+        let identityRef = identityValue as CFTypeRef
+        guard CFGetTypeID(identityRef) == SecIdentityGetTypeID() else { return nil }
+        let identity = unsafeDowncast(identityRef, to: SecIdentity.self)
 
         var certificateRef: SecCertificate?
         guard SecIdentityCopyCertificate(identity, &certificateRef) == errSecSuccess,
@@ -86,8 +89,8 @@ enum P12Inspector {
         else { return nil }
 
         let summary = SecCertificateCopySubjectSummary(certificate) as String?
-        let x509 = X509Lite.parse(SecCertificateCopyData(certificate) as Data)
         let certificateData = SecCertificateCopyData(certificate) as Data
+        let x509 = X509Lite.parse(certificateData)
         let fingerprint = SHA256.hash(data: certificateData)
             .map { String(format: "%02x", $0) }
             .joined()
@@ -95,7 +98,6 @@ enum P12Inspector {
         return P12Info(commonName: summary ?? x509?.commonName,
                        organization: x509?.organization,
                        teamID: x509?.teamID,
-                       notBefore: x509?.notBefore,
                        notAfter: x509?.notAfter,
                        certificateSHA256: fingerprint)
     }
@@ -121,7 +123,6 @@ enum P12Inspector {
 /// Minimal DER walker extracting validity dates and subject CN / O / OU
 /// from an X.509 certificate.
 struct X509Lite {
-    let notBefore: Date?
     let notAfter: Date?
     let commonName: String?
     let organization: String?
@@ -138,7 +139,6 @@ struct X509Lite {
         guard let tbs = tbsWrap.element(), tbs.tag == 0x30 else { return nil }
         var seq = DERReader(bytes: tbs.content)
 
-        var notBefore: Date?
         var notAfter: Date?
         var cn: String?
         var o: String?
@@ -154,7 +154,7 @@ struct X509Lite {
             switch logical {
             case 3:                              // validity
                 var validity = DERReader(bytes: el.content)
-                if let nb = validity.element() { notBefore = parseTime(nb) }
+                _ = validity.element()
                 if let na = validity.element() { notAfter = parseTime(na) }
             case 4:                              // subject
                 parseName(el.content) { oid, value in
@@ -168,7 +168,7 @@ struct X509Lite {
             logical += 1
         }
 
-        return X509Lite(notBefore: notBefore, notAfter: notAfter,
+        return X509Lite(notAfter: notAfter,
                         commonName: cn, organization: o, teamID: ou)
     }
 

@@ -20,6 +20,7 @@ final class InstallKeepAlive {
 
     private(set) var isActive = false
     private var watchdog: Task<Void, Never>?
+    private var sourceAttached = false
 
     /// Hard cap so silent audio never plays forever if an install is abandoned.
     private static let maxDuration: TimeInterval = 30 * 60
@@ -30,8 +31,11 @@ final class InstallKeepAlive {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, options: [.mixWithOthers])
             try session.setActive(true)
-            engine.attach(source)
-            engine.connect(source, to: engine.mainMixerNode, format: nil)
+            if !sourceAttached {
+                engine.attach(source)
+                engine.connect(source, to: engine.mainMixerNode, format: nil)
+                sourceAttached = true
+            }
             engine.mainMixerNode.outputVolume = 0
             try engine.start()
             isActive = true

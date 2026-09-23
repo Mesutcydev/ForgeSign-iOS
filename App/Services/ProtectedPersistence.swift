@@ -17,23 +17,3 @@ enum ProtectedPersistence {
         }
     }
 }
-
-enum ForgeDiagnostic: LocalizedError, Equatable, Sendable {
-    case persistence
-    case importFailure
-    case archive
-    case network
-    case signing
-    case install
-
-    var errorDescription: String? {
-        switch self {
-        case .persistence: return "ForgeSign could not save its local data. Check available storage and try again."
-        case .importFailure: return "The selected file could not be imported. Choose it again or check its format."
-        case .archive: return "The IPA archive is invalid or unsafe to process."
-        case .network: return "The network response was invalid or unavailable."
-        case .signing: return "Signing failed before a verified IPA could be created."
-        case .install: return "The install handoff did not complete. Retry while ForgeSign remains open."
-        }
-    }
-}

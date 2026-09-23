@@ -5,9 +5,10 @@ struct ForgeSignMobileApp: App {
     @StateObject private var certificates = CertificateStore()
     @StateObject private var profiles = ProfileStore()
     @StateObject private var history = HistoryStore()
-    @StateObject private var installer = InstallController()
+    @StateObject private var installCoordinator = InstallCoordinator()
     @StateObject private var repositories = RepositoryStore()
     @StateObject private var imports = ImportRouter()
+    @StateObject private var refreshSources = RefreshSourceStore()
 
     var body: some Scene {
         WindowGroup {
@@ -15,9 +16,11 @@ struct ForgeSignMobileApp: App {
                 .environmentObject(certificates)
                 .environmentObject(profiles)
                 .environmentObject(history)
-                .environmentObject(installer)
+                .environmentObject(installCoordinator)
+                .environmentObject(installCoordinator.controller)
                 .environmentObject(repositories)
                 .environmentObject(imports)
+                .environmentObject(refreshSources)
                 .onOpenURL { imports.receive($0) }
         }
     }
@@ -28,8 +31,10 @@ struct ForgeSignMobileApp: App {
 private struct ForgeRootView: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var history: HistoryStore
-    @EnvironmentObject private var installer: InstallController
+    @EnvironmentObject private var installCoordinator: InstallCoordinator
     @EnvironmentObject private var repositories: RepositoryStore
+    @EnvironmentObject private var imports: ImportRouter
+    @EnvironmentObject private var refreshSources: RefreshSourceStore
 
     @State private var tab = 0
 
@@ -45,13 +50,21 @@ private struct ForgeRootView: View {
                 .tabItem { Label("Sources", systemImage: "square.stack.3d.up") }
                 .tag(1)
 
-            LibraryView { record in
-                history.setInstallState(.installing, for: record.id)
-                installer.install(ipa: history.outputURL(for: record),
-                                  bundleId: record.bundleId,
-                                  version: record.version,
-                                  recordID: record.id)
-            }
+            LibraryView(onInstall: { record in
+                installCoordinator.install(ipa: history.outputURL(for: record),
+                                           bundleId: record.bundleId,
+                                           version: record.version,
+                                           recordID: record.id,
+                                           displayName: record.outputName)
+            }, onRefresh: { record in
+                // Refresh starts from the package that was originally imported —
+                // never from the signed artifact — and re-enters the Sign tab so
+                // the same assets and verification run again.
+                if let source = refreshSources.sourceURL(for: record.id) {
+                    imports.receive(source)
+                }
+                tab = 0
+            })
             .tabItem { Label("Library", systemImage: "clock.arrow.circlepath") }
             .tag(2)
         }

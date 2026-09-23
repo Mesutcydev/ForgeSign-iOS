@@ -2,7 +2,7 @@ import Foundation
 import Security
 import UIKit
 
-#if canImport(AltSign)
+#if FORGE_BRIDGE && canImport(AltSign)
 @preconcurrency import AltSign
 
 extension ALTAccount: @retroactive @unchecked Sendable {}
@@ -30,7 +30,9 @@ enum AltServerProvisioningError: LocalizedError, Sendable {
     case missingDeviceIdentifier
     case invalidAnisetteData
     case authenticationFailed(String)
+    case appleServiceUnavailable
     case noTeam
+    case requestedTeamUnavailable(String)
     case certificateConflict
     case certificateCreationFailed
     case deviceRegistrationFailed(String)
@@ -47,11 +49,15 @@ enum AltServerProvisioningError: LocalizedError, Sendable {
         case .missingDeviceIdentifier:
             return "Enter this iPhone or iPad’s UDID. If AltStore installed ForgeSign, reinstall this build through AltStore so it can inject the UDID automatically."
         case .invalidAnisetteData:
-            return "AltServer returned anisette data that AltSign could not use."
+            return "The selected anisette source returned data that AltSign could not use."
         case .authenticationFailed(let detail):
             return "Apple Account sign-in failed: \(detail)"
+        case .appleServiceUnavailable:
+            return "Apple Account sign-in could not finish because Apple returned an invalid response (usually a temporary HTTP 503). Retry later; this is not a provisioning-profile mismatch."
         case .noTeam:
             return "This Apple Account has no development team."
+        case .requestedTeamUnavailable(let identifier):
+            return "Team \(identifier) is not available to this Apple Account. Choose a profile from an available team or use another account."
         case .certificateConflict:
             return "This team already has a development certificate, but ForgeSign does not have its private key. ForgeSign did not revoke it because that could break AltStore and apps signed with it. Use a matching imported P12, a different Apple Account, or the manual profile mode."
         case .certificateCreationFailed:
@@ -88,7 +94,7 @@ final class AltServerProvisioningService: ObservableObject {
     var statusText: String {
         switch phase {
         case .idle: return "Ready"
-        case .connecting: return "Connecting to AltServer…"
+        case .connecting: return "Getting Apple sign-in data…"
         case .authenticating: return "Signing in to Apple…"
         case .registeringDevice: return "Registering this device…"
         case .preparingCertificate: return "Preparing signing certificate…"
@@ -118,7 +124,7 @@ final class AltServerProvisioningService: ObservableObject {
                    password: String,
                    deviceIdentifier: String,
                    altServer: AltServerClient,
-                   anisetteServerURL: URL? = nil,
+                   anisettePlan: AnisettePreference.Plan = AnisettePreference.plan(mode: .automatic, remoteServerAddress: nil, customURLText: ""),
                    importedCertificateData: Data?,
                    importedCertificatePassword: String?) async throws -> AltServerProvisioningResult {
         let cleanAppleID = appleID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -128,10 +134,10 @@ final class AltServerProvisioningService: ObservableObject {
         let cleanUDID = deviceIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanUDID.isEmpty else { throw AltServerProvisioningError.missingDeviceIdentifier }
 
-        #if canImport(AltSign)
+        #if FORGE_BRIDGE && canImport(AltSign)
         defer { phase = .idle }
         phase = .connecting
-        let json = try await altServer.fetchAnisetteData(httpURL: anisetteServerURL)
+        let json = try await altServer.fetchAnisetteData(plan: anisettePlan)
         guard let anisette = ALTAnisetteData(json: json) else {
             throw AltServerProvisioningError.invalidAnisetteData
         }
@@ -141,16 +147,26 @@ final class AltServerProvisioningService: ObservableObject {
                                                         password: password,
                                                         anisetteData: anisette)
         let teams = try await fetchTeams(account: account, session: session)
+        if let requestedTeamID = request.teamIdentifier,
+           !teams.contains(where: { $0.identifier.caseInsensitiveCompare(requestedTeamID) == .orderedSame }) {
+            throw AltServerProvisioningError.requestedTeamUnavailable(requestedTeamID)
+        }
         guard let team = preferredTeam(from: teams, requestedTeamID: request.teamIdentifier) else {
             throw AltServerProvisioningError.noTeam
         }
+        let deviceType: ALTDeviceType = UIDevice.current.userInterfaceIdiom == .pad ? .ipad : .iphone
 
         phase = .registeringDevice
-        try await registerDevice(identifier: cleanUDID, team: team, session: session)
+        try await registerDevice(identifier: cleanUDID,
+                                 deviceName: UIDevice.current.name,
+                                 deviceType: deviceType,
+                                 team: team,
+                                 session: session)
 
         phase = .preparingCertificate
         let certificate = try await prepareCertificate(team: team,
                                                        session: session,
+                                                       deviceName: UIDevice.current.name,
                                                        importedData: importedCertificateData,
                                                        importedPassword: importedCertificatePassword)
         guard certificate.privateKey != nil, let p12 = certificate.p12Data() else {
@@ -164,9 +180,10 @@ final class AltServerProvisioningService: ObservableObject {
         let rootBundleID = Self.accountBundleIdentifier(root.resolvedBundleIdentifier,
                                                         teamIdentifier: team.identifier)
         let targets = request.bundles.map { bundle -> (ProvisioningProviderBundle, String) in
-            let resolved = bundle.resolvedBundleIdentifier.replacingOccurrences(
-                of: root.resolvedBundleIdentifier,
-                with: rootBundleID
+            let resolved = BundleIdentifierResolver.replacingRootPrefix(
+                in: bundle.resolvedBundleIdentifier,
+                originalRoot: root.resolvedBundleIdentifier,
+                resolvedRoot: rootBundleID
             )
             return (bundle, resolved)
         }
@@ -176,6 +193,7 @@ final class AltServerProvisioningService: ObservableObject {
             phase = .preparingProfiles(index + 1, targets.count)
             let profile = try await prepareProfile(bundle: target.0,
                                                    bundleIdentifier: target.1,
+                                                   deviceType: deviceType,
                                                    team: team,
                                                    session: session)
             let leaf = target.1.split(separator: ".").last.map(String.init) ?? "app"
@@ -196,27 +214,53 @@ final class AltServerProvisioningService: ObservableObject {
     }
 }
 
-#if canImport(AltSign)
+#if FORGE_BRIDGE && canImport(AltSign)
 private extension AltServerProvisioningService {
-    func authenticate(appleID: String,
-                      password: String,
-                      anisetteData: ALTAnisetteData) async throws -> (ALTAccount, ALTAppleAPISession) {
+    nonisolated func authenticate(appleID: String,
+                                  password: String,
+                                  anisetteData: ALTAnisetteData) async throws -> (ALTAccount, ALTAppleAPISession) {
+        do {
+            return try await authenticateOnce(appleID: appleID,
+                                              password: password,
+                                              anisetteData: anisetteData)
+        } catch {
+            // The patched AltSign dependency retries GSA 5xx responses five
+            // times, using a fresh URLSession for every attempt. Retrying the
+            // whole exchange here would duplicate that work and can outlive
+            // the short anisette validity window.
+            if Self.isRetryableAppleResponse(error) {
+                throw AltServerProvisioningError.appleServiceUnavailable
+            }
+            throw error
+        }
+    }
+
+    nonisolated private func authenticateOnce(appleID: String,
+                                              password: String,
+                                              anisetteData: ALTAnisetteData) async throws -> (ALTAccount, ALTAppleAPISession) {
         try await withCheckedThrowingContinuation { continuation in
             ALTAppleAPI.shared.authenticate(
                 appleID: appleID,
                 password: password,
                 anisetteData: anisetteData,
                 verificationHandler: { [weak self] reply in
-                    Task { @MainActor in
+                    let replyBox = VerificationReplyBox(reply)
+                    Task { @MainActor [weak self, replyBox] in
                         guard let self else {
-                            reply(nil)
+                            replyBox.call(nil)
                             return
                         }
-                        self.verificationReply = reply
+                        self.verificationReply = { code in replyBox.call(code) }
                         self.isRequestingVerificationCode = true
                     }
                 },
                 completionHandler: { account, session, error in
+                    // AltSign completes on its URLSession delegate queue. This
+                    // callback is deliberately nonisolated; CheckedContinuation
+                    // is thread-safe and must be resumed directly from the
+                    // queue that invokes the Objective-C callback. Hopping the
+                    // callback itself to MainActor triggers Swift's isolation
+                    // precondition on iOS 27 before the task can start.
                     if let account, let session {
                         continuation.resume(returning: (account, session))
                     } else {
@@ -229,7 +273,19 @@ private extension AltServerProvisioningService {
         }
     }
 
-    func fetchTeams(account: ALTAccount, session: ALTAppleAPISession) async throws -> [ALTTeam] {
+    nonisolated private static func isRetryableAppleResponse(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        let debugDescription = nsError.userInfo[NSDebugDescriptionErrorKey] as? String ?? ""
+        let text = "\(nsError.localizedDescription) \(debugDescription)"
+        return (nsError.domain == NSCocoaErrorDomain && nsError.code == 3840)
+            || (nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorBadServerResponse)
+            || text.localizedCaseInsensitiveContains("correct format")
+            || text.localizedCaseInsensitiveContains("unknown tag html")
+            || text.range(of: #"\bHTTP\s+5\d\d\b"#, options: .regularExpression) != nil
+            || text.localizedCaseInsensitiveContains("service temporarily unavailable")
+    }
+
+    nonisolated func fetchTeams(account: ALTAccount, session: ALTAppleAPISession) async throws -> [ALTTeam] {
         try await withCheckedThrowingContinuation { continuation in
             ALTAppleAPI.shared.fetchTeams(for: account, session: session) { teams, error in
                 if let teams {
@@ -253,9 +309,11 @@ private extension AltServerProvisioningService {
             ?? teams.first
     }
 
-    func registerDevice(identifier: String,
-                        team: ALTTeam,
-                        session: ALTAppleAPISession) async throws {
+    nonisolated func registerDevice(identifier: String,
+                                    deviceName: String,
+                                    deviceType: ALTDeviceType,
+                                    team: ALTTeam,
+                                    session: ALTAppleAPISession) async throws {
         let devices: [ALTDevice] = try await withCheckedThrowingContinuation { continuation in
             ALTAppleAPI.shared.fetchDevices(for: team, types: [.iphone, .ipad], session: session) { devices, error in
                 if let devices {
@@ -271,9 +329,9 @@ private extension AltServerProvisioningService {
             return
         }
         _ = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<ALTDevice, Error>) in
-            ALTAppleAPI.shared.registerDevice(name: UIDevice.current.name,
+            ALTAppleAPI.shared.registerDevice(name: deviceName,
                                               identifier: identifier,
-                                              type: .iphone,
+                                              type: deviceType,
                                               team: team,
                                               session: session) { device, error in
                 if let device {
@@ -287,10 +345,11 @@ private extension AltServerProvisioningService {
         }
     }
 
-    func prepareCertificate(team: ALTTeam,
-                            session: ALTAppleAPISession,
-                            importedData: Data?,
-                            importedPassword: String?) async throws -> ALTCertificate {
+    nonisolated func prepareCertificate(team: ALTTeam,
+                                        session: ALTAppleAPISession,
+                                        deviceName: String,
+                                        importedData: Data?,
+                                        importedPassword: String?) async throws -> ALTCertificate {
         let certificates: [ALTCertificate] = try await withCheckedThrowingContinuation { continuation in
             ALTAppleAPI.shared.fetchCertificates(for: team, session: session) { certificates, error in
                 if let certificates {
@@ -319,7 +378,7 @@ private extension AltServerProvisioningService {
             throw AltServerProvisioningError.certificateConflict
         }
         let created: ALTCertificate = try await withCheckedThrowingContinuation { continuation in
-            ALTAppleAPI.shared.addCertificate(machineName: "ForgeSign - \(UIDevice.current.name)",
+            ALTAppleAPI.shared.addCertificate(machineName: "ForgeSign - \(deviceName)",
                                               to: team,
                                               session: session) { certificate, error in
                 if let certificate {
@@ -350,10 +409,11 @@ private extension AltServerProvisioningService {
         return certificate
     }
 
-    func prepareProfile(bundle: ProvisioningProviderBundle,
-                        bundleIdentifier: String,
-                        team: ALTTeam,
-                        session: ALTAppleAPISession) async throws -> ALTProvisioningProfile {
+    nonisolated func prepareProfile(bundle: ProvisioningProviderBundle,
+                                    bundleIdentifier: String,
+                                    deviceType: ALTDeviceType,
+                                    team: ALTTeam,
+                                    session: ALTAppleAPISession) async throws -> ALTProvisioningProfile {
         let appID = try await prepareAppID(bundle: bundle,
                                           bundleIdentifier: bundleIdentifier,
                                           team: team,
@@ -363,7 +423,7 @@ private extension AltServerProvisioningService {
         }
         return try await withCheckedThrowingContinuation { continuation in
             ALTAppleAPI.shared.fetchProvisioningProfile(for: appID,
-                                                        deviceType: .iphone,
+                                                        deviceType: deviceType,
                                                         team: team,
                                                         session: session) { profile, error in
                 if let profile {
@@ -378,10 +438,10 @@ private extension AltServerProvisioningService {
         }
     }
 
-    func prepareAppID(bundle: ProvisioningProviderBundle,
-                      bundleIdentifier: String,
-                      team: ALTTeam,
-                      session: ALTAppleAPISession) async throws -> ALTAppID {
+    nonisolated func prepareAppID(bundle: ProvisioningProviderBundle,
+                                  bundleIdentifier: String,
+                                  team: ALTTeam,
+                                  session: ALTAppleAPISession) async throws -> ALTAppID {
         let appIDs: [ALTAppID] = try await withCheckedThrowingContinuation { continuation in
             ALTAppleAPI.shared.fetchAppIDs(for: team, session: session) { appIDs, error in
                 if let appIDs {
@@ -419,10 +479,18 @@ private extension AltServerProvisioningService {
 
         let needsGroups = !bundle.requiredAppGroups.isEmpty
         let hasGroups = (appID.features[.appGroups] as? Bool) == true
-        guard needsGroups != hasGroups else { return appID }
-        let updated = appID.copy() as! ALTAppID
+        // Existing App IDs can be shared with other installs. A bundle that
+        // does not need groups must not disable a capability already enabled
+        // for that App ID.
+        guard needsGroups && !hasGroups else { return appID }
+        guard let updated = appID.copy() as? ALTAppID else {
+            throw AltServerProvisioningError.appIDFailed(
+                bundleIdentifier,
+                "Apple returned an invalid App ID object while updating capabilities."
+            )
+        }
         var features = updated.features
-        features[.appGroups] = needsGroups
+        features[.appGroups] = true
         updated.features = features
         return try await withCheckedThrowingContinuation { continuation in
             ALTAppleAPI.shared.update(updated, team: team, session: session) { appID, error in
@@ -438,10 +506,10 @@ private extension AltServerProvisioningService {
         }
     }
 
-    func assignAppGroups(_ requestedGroups: [String],
-                         to appID: ALTAppID,
-                         team: ALTTeam,
-                         session: ALTAppleAPISession) async throws {
+    nonisolated func assignAppGroups(_ requestedGroups: [String],
+                                     to appID: ALTAppID,
+                                     team: ALTTeam,
+                                     session: ALTAppleAPISession) async throws {
         let fetched: [ALTAppGroup] = try await withCheckedThrowingContinuation { continuation in
             ALTAppleAPI.shared.fetchAppGroups(for: team, session: session) { groups, error in
                 if let groups {
@@ -466,25 +534,27 @@ private extension AltServerProvisioningService {
                                                groupIdentifier: resolved,
                                                team: team,
                                                session: session) { group, error in
-                    if let group {
-                        continuation.resume(returning: group)
-                    } else {
-                        continuation.resume(throwing: AltServerProvisioningError.appGroupFailed(
-                            resolved,
-                            error?.localizedDescription ?? "Apple rejected the App Group."
-                        ))
-                    }
+                if let group {
+                    continuation.resume(returning: group)
+                } else {
+                    continuation.resume(throwing: AltServerProvisioningError.appGroupFailed(
+                        resolved,
+                        error?.localizedDescription ?? "Apple rejected the App Group."
+                    ))
                 }
             }
+        }
             groups.append(created)
         }
+        let groupsToAssign = groups
+        let firstGroupIdentifier = groupsToAssign.first?.groupIdentifier ?? "unknown"
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            ALTAppleAPI.shared.assign(appID, to: groups, team: team, session: session) { success, error in
+            ALTAppleAPI.shared.assign(appID, to: groupsToAssign, team: team, session: session) { success, error in
                 if success {
                     continuation.resume(returning: ())
                 } else {
                     continuation.resume(throwing: AltServerProvisioningError.appGroupFailed(
-                        groups.first?.groupIdentifier ?? "unknown",
+                        firstGroupIdentifier,
                         error?.localizedDescription ?? "Apple rejected the App Group assignment."
                     ))
                 }
@@ -492,19 +562,36 @@ private extension AltServerProvisioningService {
         }
     }
 
-    static func accountBundleIdentifier(_ bundleID: String, teamIdentifier: String) -> String {
+    nonisolated static func accountBundleIdentifier(_ bundleID: String, teamIdentifier: String) -> String {
         let suffix = "." + teamIdentifier
         return bundleID.hasSuffix(suffix) ? bundleID : bundleID + suffix
     }
 
-    static func accountAppGroupIdentifier(_ groupID: String, teamIdentifier: String) -> String {
+    nonisolated static func accountAppGroupIdentifier(_ groupID: String, teamIdentifier: String) -> String {
         let suffix = "." + teamIdentifier
         return groupID.hasSuffix(suffix) ? groupID : groupID + suffix
     }
 
-    static func appIDName(for bundle: ProvisioningProviderBundle) -> String {
+    nonisolated static func appIDName(for bundle: ProvisioningProviderBundle) -> String {
         let leaf = bundle.resolvedBundleIdentifier.split(separator: ".").last.map(String.init) ?? "App"
         return "ForgeSign \(bundle.kind.displayName) \(leaf)"
+    }
+}
+
+private final class VerificationReplyBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reply: ((String?) -> Void)?
+
+    init(_ reply: @escaping (String?) -> Void) {
+        self.reply = reply
+    }
+
+    func call(_ code: String?) {
+        lock.lock()
+        let reply = self.reply
+        self.reply = nil
+        lock.unlock()
+        reply?(code)
     }
 }
 #endif
