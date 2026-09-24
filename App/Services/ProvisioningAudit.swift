@@ -39,6 +39,13 @@ struct ProvisioningAudit: Equatable, Sendable {
 
     var isReady: Bool { !rows.contains { $0.state.isBlocking } }
 
+    /// True when only app extensions (not the app, a watch app or an App
+    /// Clip) lack a usable profile, so removing extensions lets the app sign.
+    var onlyExtensionsBlocked: Bool {
+        let blocked = rows.filter { $0.kind != .app && $0.state.isBlocking }
+        return !blocked.isEmpty && blocked.allSatisfy { $0.kind == .extension }
+    }
+
     var firstBlockingMessage: String? {
         firstBlockingMessage(includeNested: true)
     }

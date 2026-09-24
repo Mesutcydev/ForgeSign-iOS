@@ -4,7 +4,6 @@ struct ContentView: View {
     @StateObject private var signer = SigningService()
     @StateObject private var altServer = AltServerClient()
     @StateObject private var altProvisioner = AltServerProvisioningService()
-    @StateObject private var deviceInstall = DeviceInstallationModel()
 
     @EnvironmentObject private var certStore: CertificateStore
     @EnvironmentObject private var profileStore: ProfileStore
@@ -59,14 +58,6 @@ struct ContentView: View {
                                 customURLText: anisetteServerURL)
     }
 
-    /// The UDID ForgeSign can honestly check a pairing record against: the one
-    /// entered for provisioning, or the AltStore-injected `ALTDeviceID`.
-    private var resolvedDeviceUDID: String? {
-        let entered = altServerDeviceIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !entered.isEmpty { return entered }
-        return ProvisioningAuditService.currentDeviceIdentifier
-    }
-
     var body: some View {
         NavigationStack {
             ZStack {
@@ -101,14 +92,6 @@ struct ContentView: View {
                                                   dylibURL = nil
                                                   injectIntoExtensions = false
                                               })
-                        DeviceInstallationSection(
-                            model: deviceInstall,
-                            availableMethods: installCoordinator.availableMethods,
-                            expectedUDID: resolvedDeviceUDID,
-                            anisetteSource: anisettePlan.summary,
-                            importMessage: imports.pairingImportMessage,
-                            onImportMessageShown: { imports.pairingImportMessage = nil }
-                        )
                         signButton
 
                         if let hint = signReadinessHint {
@@ -117,6 +100,15 @@ struct ContentView: View {
 
                         if let signNotice {
                             warningCard(signNotice)
+                            if canSignWithoutExtensions {
+                                GlassSecondaryButton(label: "Sign Without App Extensions",
+                                                     systemImage: "puzzlepiece.extension") {
+                                    removeExtensions = true
+                                    sign(allowAutomaticProvisioning: false)
+                                }
+                                .padding(.horizontal, T.pad)
+                                .padding(.top, 12)
+                            }
                         }
 
                         if let provisioningWarning, signer.phase != .provisioning {
@@ -193,11 +185,6 @@ struct ContentView: View {
                     switch request {
                     case .ipa(let url): stageIPA(url)
                     case .dylib(let url): stageDylib(url)
-                    case .pairingFile(let url):
-                        // Import straight into the Keychain; the Device
-                        // Installation card re-reads the store when it appears.
-                        deviceInstall.importPairing(from: url)
-                        imports.pairingImportMessage = deviceInstall.message
                     }
                 }
                 .onChange(of: profileStore.profiles) { _ in refreshProvisioningAudit() }
@@ -509,12 +496,6 @@ struct ContentView: View {
                             installCoordinator.cancel()
                         }
                     }
-                    if let fallback = installCoordinator.fallbackMethods.first {
-                        GlassSecondaryButton(label: "Use \(fallback.displayName) Instead",
-                                             systemImage: "arrow.triangle.branch") {
-                            installCoordinator.retryWithFallback()
-                        }
-                    }
                     if installCoordinator.lastError != nil, !installCoordinator.isInstalling {
                         GlassSecondaryButton(label: "Try Again", systemImage: "arrow.clockwise") {
                             installCoordinator.retry()
@@ -668,6 +649,10 @@ struct ContentView: View {
         .padding(.top, 10)
     }
 
+    private var canSignWithoutExtensions: Bool {
+        !removeExtensions && provisioningAudit?.onlyExtensionsBlocked == true
+    }
+
     private var canSignManually: Bool {
         certStore.selected != nil && profileStore.selected != nil && effectivePassword != nil
     }
@@ -692,7 +677,10 @@ struct ContentView: View {
                 deviceIdentifier: altServerDeviceIdentifier
             )
             provisioningAudit = audit
-            if isAppleAccountReady {
+            // Apple is only contacted when the imported certificate and
+            // profiles cannot cover this IPA; a working manual setup never
+            // waits on (or fails with) Apple's sign-in service.
+            if isAppleAccountReady && (!canSignManually || !audit.isReady) {
                 obtainMissingProfiles(inspection: inspection,
                                       audit: audit,
                                       certificate: certStore.selected)
@@ -728,7 +716,10 @@ struct ContentView: View {
         if let audit {
             provisioningAudit = audit
             if let blocker = audit.rows.first(where: { $0.kind != .app && $0.state.isBlocking }) {
-                signNotice = "\(blocker.kind.displayName) \(blocker.resolvedBundleID): \(blocker.detail) Import a matching profile or use Apple Account provisioning."
+                signNotice = "\(blocker.kind.displayName) \(blocker.resolvedBundleID): \(blocker.detail) "
+                    + (canSignWithoutExtensions
+                        ? "Import a matching profile, or sign without app extensions (the app works; features like its share sheet are dropped)."
+                        : "Import a matching profile or use Apple Account provisioning.")
                 return
             }
         }
