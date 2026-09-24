@@ -2,7 +2,7 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign and prepare IPAs on-device; installation uses a loopback server and a trusted remote HTTPS manifest, with no certificate or app-content upload.
 
-**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 2.6](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.6/ForgeSign-2.6.ipa)**
+**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 2.7](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.7/ForgeSign-2.7.ipa)**
 
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
@@ -61,7 +61,7 @@ This excludes Finder metadata and AppleDouble resource forks (`._*`, including m
 
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-2.6.ipa` from [ForgeSign 2.6](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.6). The IPA ships **unsigned** — sign it with your own certificate and provisioning profile before installing.
+Grab `ForgeSign-2.7.ipa` from [ForgeSign 2.7](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.7). The IPA ships **unsigned** — sign it with your own certificate and provisioning profile before installing.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
@@ -95,17 +95,12 @@ If Apple Account provisioning cannot finish, ForgeSign checks the imported profi
 
 ForgeSign reuses a matching imported or previously generated certificate. It deliberately refuses to revoke an unknown existing certificate, because doing so could invalidate AltStore and other installed apps. On a free account already occupied by AltStore, use a separate Apple Account or import the exact matching P12. Normal free-account App ID, active-app and seven-day expiry limits still apply.
 
-## Installation methods
+## Installation
 
-Signing always ends at a verified `.ipa`; installation is a separate layer
-(`App/Services/Installation/`) so a new transport never touches the signing
-pipeline:
-
-| Method | State | Notes |
-|---|---|---|
-| **OTA** | shipped (default) | Loopback HTTP server + trusted HTTPS manifest + `itms-services`, Range requests, Safari fallback, keep-alive. |
-| Direct Device (paired) | built, off by default | Transfers the signed IPA over the on-device tunnel with `idevice` (AFC staging → `installation_proxy` install/upgrade) and records a device-confirmed `installed`. Off until it has been validated against real hardware (`FeatureFlags.directDeviceInstall`). |
-| Remote AltServer | not implemented | Deliberately not wired up: AltStore Classic's "no computer" mode is device pairing + `minimuxer`, not an HTTP API we could speak. Behind `FeatureFlags.remoteAltServerInstall`. |
+Signing always ends at a verified `.ipa`. `InstallCoordinator` installs it over
+OTA: a loopback HTTP server, a trusted HTTPS manifest and `itms-services`, with
+Range requests, a Safari fallback and keep-alive. The Library records
+`delivered`, because iOS finishes the install out of process.
 
 ### Refresh
 
@@ -125,29 +120,14 @@ installed as an upgrade so app data survives.
 - Expiry scanning runs in the foreground. Background execution is **not**
   claimed: a sideloaded app cannot rely on `BGTaskScheduler`, and ForgeSign does
   not pretend otherwise.
-- Remote AltServer stays unimplemented on purpose: AltStore Classic's remote path is device pairing + minimuxer, not an HTTP API.
 
-`InstallCoordinator` owns installation: it resolves the requested method,
-drives the chosen backend, reports phases (preparing → connecting →
-transferring → delivered/installed), and updates the Library. Only a
-device-confirmed install may record `installed` — the OTA handoff records
-`delivered`, because iOS finishes the install out of process.
+## What’s new in 2.7
 
-The **Device Installation** card on the Sign tab carries the groundwork for the
-paired transports:
-
-- **Pairing** — import a `.mobiledevicepairing` or `.plist` record exported by
-  AltStore, SideStore or `idevice_pair`. Records are validated on import
-  (required fields, plausible UDID) and stored in this device's Keychain only
-  (`ThisDeviceOnly`, never iCloud, never backups). They are never logged and
-  never included in diagnostics.
-- **Local tunnel** — probes the candidate endpoints the VPN may expose
-  concurrently with a timeout and reports the one that actually answered.
-  No address is assumed; a reachable endpoint is what counts.
-- **Health check** — one row per requirement, with services that do not exist
-  in this build marked *unavailable* rather than a false green tick, plus
-  **Copy Diagnostics** that is redacted (no pairing payloads, private keys,
-  certificates, or full UDIDs).
+- Removes the paired-device (idevice/LocalDevVPN) install path and its Device Installation card. It was switched on in 2.6 despite the notes below, preempted the working OTA install, and double-freed its session on reuse. Install is OTA-only again.
+- Apple Account provisioning only runs when the imported certificate and profiles cannot sign the IPA, so a working manual setup never waits on Apple.
+- When only app extensions lack a profile, a **Sign Without App Extensions** button signs the app instead of dead-ending.
+- Apple sign-in failures now show Apple's actual response instead of a blanket "HTTP 503".
+- ForgeSign no longer claims every `.plist` file in the share sheet.
 
 ## What’s new in 2.6
 

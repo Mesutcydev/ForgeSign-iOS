@@ -123,12 +123,6 @@ final class HistoryStore: ObservableObject {
         save()
     }
 
-    func setInstallMethod(_ method: InstallationMethod, for id: UUID) {
-        guard let i = records.firstIndex(where: { $0.id == id }) else { return }
-        records[i].installMethodRaw = method.rawValue
-        save()
-    }
-
     /// Records a completed refresh. Only called after a verified re-sign.
     func markRefreshed(_ date: Date = .now, profileExpiresAt: Date?, for id: UUID) {
         guard let i = records.firstIndex(where: { $0.id == id }) else { return }

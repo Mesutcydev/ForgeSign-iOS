@@ -75,12 +75,6 @@ targets:
       - package: AltSign
         product: AltSign-Dynamic
         embed: true
-      # Vendored idevice FFI (MIT). Rebuild with
-      # scripts/build_idevice_xcframework.sh; the Swift wrapper is guarded by
-      # `#if canImport(IDevice)` so the app still builds without it.
-      - framework: vendor/idevice/IDevice.xcframework
-        embed: false
-        codeSign: false
 
   ForgeSignMobileTests:
     type: bundle.unit-test

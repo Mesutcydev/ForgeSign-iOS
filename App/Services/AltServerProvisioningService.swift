@@ -30,7 +30,7 @@ enum AltServerProvisioningError: LocalizedError, Sendable {
     case missingDeviceIdentifier
     case invalidAnisetteData
     case authenticationFailed(String)
-    case appleServiceUnavailable
+    case appleServiceUnavailable(String)
     case noTeam
     case requestedTeamUnavailable(String)
     case certificateConflict
@@ -52,8 +52,10 @@ enum AltServerProvisioningError: LocalizedError, Sendable {
             return "The selected anisette source returned data that AltSign could not use."
         case .authenticationFailed(let detail):
             return "Apple Account sign-in failed: \(detail)"
-        case .appleServiceUnavailable:
-            return "Apple Account sign-in could not finish because Apple returned an invalid response (usually a temporary HTTP 503). Retry later; this is not a provisioning-profile mismatch."
+        case .appleServiceUnavailable(let detail):
+            // Keep Apple's own words: a blanket "HTTP 503" hid anisette and
+            // parse failures that need a different fix than "retry later".
+            return "Apple Account sign-in could not finish because Apple returned an invalid response (\(detail)). Retry later or pick another anisette source; this is not a provisioning-profile mismatch."
         case .noTeam:
             return "This Apple Account has no development team."
         case .requestedTeamUnavailable(let identifier):
@@ -229,7 +231,7 @@ private extension AltServerProvisioningService {
             // whole exchange here would duplicate that work and can outlive
             // the short anisette validity window.
             if Self.isRetryableAppleResponse(error) {
-                throw AltServerProvisioningError.appleServiceUnavailable
+                throw AltServerProvisioningError.appleServiceUnavailable(Self.underlyingDetail(error))
             }
             throw error
         }
@@ -271,6 +273,13 @@ private extension AltServerProvisioningService {
                 }
             )
         }
+    }
+
+    /// `authenticateOnce` wraps AltSign's error as `authenticationFailed`;
+    /// unwrap it so the message names what Apple actually sent.
+    nonisolated private static func underlyingDetail(_ error: Error) -> String {
+        if case AltServerProvisioningError.authenticationFailed(let detail) = error { return detail }
+        return error.localizedDescription
     }
 
     nonisolated private static func isRetryableAppleResponse(_ error: Error) -> Bool {
