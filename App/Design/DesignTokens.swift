@@ -76,4 +76,12 @@ extension View {
     func minimumInteractiveSize() -> some View {
         frame(minWidth: 44, minHeight: 44)
     }
+
+    /// Caps scrolling form content at a readable width and centres it. An iPad
+    /// is wide enough that a full-width row leaves a label and its control
+    /// close to a thousand points apart; iPhone widths sit under the cap, so
+    /// they are unaffected.
+    func forgeReadableWidth() -> some View {
+        frame(maxWidth: 700).frame(maxWidth: .infinity)
+    }
 }

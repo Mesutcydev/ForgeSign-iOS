@@ -46,6 +46,7 @@ struct LibraryView: View {
                         }
                     }
                     .padding(.bottom, 40)
+                    .forgeReadableWidth()
                 }
                 .scrollIndicators(.hidden)
                 .scrollContentBackground(.hidden)

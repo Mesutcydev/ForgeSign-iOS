@@ -139,6 +139,7 @@ struct ContentView: View {
                         }
                     }
                     .padding(.bottom, 40)
+                    .forgeReadableWidth()
                 }
                 .scrollIndicators(.hidden)
                 .scrollDismissesKeyboard(.interactively)

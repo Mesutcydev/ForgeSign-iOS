@@ -31,6 +31,7 @@ struct SourcesView: View {
                         reposSection
                     }
                     .padding(.bottom, 40)
+                    .forgeReadableWidth()
                 }
                 .scrollIndicators(.hidden)
                 .scrollContentBackground(.hidden)
