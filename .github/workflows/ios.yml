@@ -6,6 +6,10 @@ on:
     # A version tag (e.g. v2.8.2) also publishes the validated IPA.
     tags: ['v*']
   pull_request:
+  # Run manually on main to publish the Info.plist version when its tag
+  # can't be pushed directly; the release job then creates v<version> at
+  # the validated commit.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -106,7 +110,9 @@ jobs:
   # replaces its assets when the release was already drafted by hand.
   release:
     needs: validate
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -119,15 +125,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            TAG="$GITHUB_REF_NAME"
+          else
+            TAG="v$(python3 -c 'import plistlib; print(plistlib.load(open("Info.plist", "rb"))["CFBundleShortVersionString"])')"
+            # A manual run publishes this commit only; never re-point an
+            # existing tag.
+            if EXISTING=$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha 2>/dev/null); then
+              if [ "$EXISTING" != "$GITHUB_SHA" ]; then
+                echo "::error::$TAG already points at $EXISTING, not $GITHUB_SHA"
+                exit 1
+              fi
+            fi
+          fi
+          VERSION="${TAG#v}"
           gh run download "$GITHUB_RUN_ID" --name ForgeSign-latest --dir release
           test -f release/ForgeSign-latest.ipa
           cp release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa"
           (cd release && shasum -a 256 ForgeSign-latest.ipa "ForgeSign-$VERSION.ipa" > SHA256SUMS.txt)
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa" release/SHA256SUMS.txt --clobber
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa" release/SHA256SUMS.txt --clobber
           else
-            gh release create "$GITHUB_REF_NAME" release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa" release/SHA256SUMS.txt \
+            gh release create "$TAG" release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa" release/SHA256SUMS.txt \
+              --target "$GITHUB_SHA" \
               --title "ForgeSign $VERSION" \
               --notes-file WHATS_NEW.md
           fi
