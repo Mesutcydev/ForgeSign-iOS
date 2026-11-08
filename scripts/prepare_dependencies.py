@@ -17,6 +17,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -47,8 +49,18 @@ def archive(name, cache):
     partial = path.with_suffix(".partial")
     try:
         print(f"Downloading pinned {name} source", flush=True)
-        with urllib.request.urlopen(pin["url"], timeout=120) as source, partial.open("wb") as file:
-            shutil.copyfileobj(source, file)
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(pin["url"], timeout=120) as source, partial.open("wb") as file:
+                    shutil.copyfileobj(source, file)
+                break
+            except (urllib.error.URLError, TimeoutError) as error:
+                if isinstance(error, urllib.error.HTTPError) and error.code not in (408, 429, 500, 502, 503, 504):
+                    raise
+                if attempt == 2:
+                    raise
+                print(f"Retrying {name} source download after a temporary network failure", flush=True)
+                time.sleep(2 ** attempt)
         if digest(partial) != pin["sha256"]:
             raise RuntimeError(f"Checksum mismatch for {name}; dependency was not accepted")
         partial.replace(path)
