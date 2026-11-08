@@ -9,7 +9,7 @@ struct GlassTactileButtonStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.965 : 1)
             .brightness(configuration.isPressed ? 0.045 : 0)
-            .animation(.spring(response: 0.20, dampingFraction: 0.82), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : .spring(response: 0.20, dampingFraction: 0.82), value: configuration.isPressed)
     }
 }
 
@@ -70,7 +70,8 @@ struct GlassPrimaryButton: View {
             }
             .foregroundColor(T.isDark ? .white : T.ink)
             .padding(.horizontal, 16)
-            .frame(height: 52)
+            .padding(.vertical, 15)
+            .frame(minHeight: 52)
             .frame(maxWidth: .infinity)
             .glassSurface(.button)
             .overlay {
@@ -109,7 +110,8 @@ struct GlassSecondaryButton: View {
                     .foregroundColor(T.ink4)
             }
             .padding(.horizontal, 16)
-            .frame(height: 52)
+            .padding(.vertical, 15)
+            .frame(minHeight: 52)
             .frame(maxWidth: .infinity)
             .glassSurface(.button)
             .overlay {
@@ -169,12 +171,16 @@ struct GlassRow<Trailing: View>: View {
     @ViewBuilder var trailing: () -> Trailing
 
     @Environment(\.forgeTheme) private var T
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        HStack(spacing: 12) {
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 12))
+        layout {
             Text(label).font(T.sans(15, .medium)).foregroundColor(T.ink)
                 .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
+            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
             trailing()
         }
         .padding(.horizontal, 16)
@@ -182,41 +188,72 @@ struct GlassRow<Trailing: View>: View {
     }
 }
 
-/// File-picker row.
-struct GlassFileRow: View {
+/// A file or signing-asset selection. At accessibility sizes the value moves
+/// below its label instead of squeezing both into narrow columns.
+struct SigningAssetRow: View {
     let icon: String
     let label: String
-    let file: URL?
+    let value: String?
+    var status: String? = nil
+    var statusColor: Color = .secondary
     let action: () -> Void
 
     @Environment(\.forgeTheme) private var T
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
+        let accessibleSize = dynamicTypeSize.isAccessibilitySize
+        let layout = accessibleSize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 12))
         Button(action: action) {
             HStack(spacing: 12) {
                 Image(systemName: icon)
                     .font(.system(size: 13, weight: .medium))
                     .foregroundColor(T.accent2)
                     .frame(width: 22)
-                Text(label).font(T.sans(15, .medium)).foregroundColor(T.ink)
-                Spacer(minLength: 8)
-                Text(file?.lastPathComponent ?? "Choose…")
-                    .font(file == nil ? T.sans(13) : T.mono(12))
-                    .foregroundColor(file == nil ? T.ink3 : T.ink2)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: 150, alignment: .trailing)
+                    .accessibilityHidden(true)
+                layout {
+                    Text(label)
+                        .font(T.sans(15, .medium))
+                        .foregroundColor(T.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !accessibleSize { Spacer(minLength: 8) }
+                    VStack(alignment: accessibleSize ? .leading : .trailing, spacing: 4) {
+                        if let status { GlassStatusPill(text: status, color: statusColor) }
+                        Text(value ?? "Choose…")
+                            .font(value == nil ? T.sans(13) : T.mono(12))
+                            .foregroundColor(value == nil ? T.ink3 : T.ink2)
+                            .lineLimit(accessibleSize ? 2 : 1)
+                            .truncationMode(.middle)
+                    }
+                    .frame(maxWidth: accessibleSize ? .infinity : 150,
+                           alignment: accessibleSize ? .leading : .trailing)
+                }
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(T.ink4)
+                    .accessibilityHidden(true)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
             .contentShape(Rectangle())
         }
         .buttonStyle(GlassTactileButtonStyle())
-        .accessibilityLabel("\(label), \(file?.lastPathComponent ?? "not selected")")
+        .accessibilityLabel(label)
+        .accessibilityValue([value ?? "not selected", status].compactMap { $0 }.joined(separator: ", "))
         .accessibilityHint("Double-tap to choose a file.")
+    }
+}
+
+struct GlassFileRow: View {
+    let icon: String
+    let label: String
+    let file: URL?
+    let action: () -> Void
+
+    var body: some View {
+        SigningAssetRow(icon: icon, label: label, value: file?.lastPathComponent, action: action)
     }
 }
 
@@ -229,15 +266,21 @@ struct GlassInputRow: View {
     var isSecure: Bool = false
 
     @Environment(\.forgeTheme) private var T
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(T.accent2)
-                .frame(width: 22)
-            Text(label).font(T.sans(15, .medium)).foregroundColor(T.ink)
-            Spacer(minLength: 8)
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(spacing: 12))
+        layout {
+            HStack(spacing: 12) {
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(T.accent2)
+                    .frame(width: 22)
+                Text(label).font(T.sans(15, .medium)).foregroundColor(T.ink)
+            }
+            if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
             Group {
                 if isSecure {
                     SecureField(placeholder, text: $text)
@@ -250,8 +293,9 @@ struct GlassInputRow: View {
             .textFieldStyle(.plain)
             .font(T.mono(13))
             .foregroundColor(T.ink)
-            .multilineTextAlignment(.trailing)
-            .frame(maxWidth: 170)
+            .multilineTextAlignment(dynamicTypeSize.isAccessibilitySize ? .leading : .trailing)
+            .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : 170)
+            .accessibilityLabel(label)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -266,46 +310,14 @@ struct GlassToggleRow: View {
     @Environment(\.forgeTheme) private var T
 
     var body: some View {
-        HStack(spacing: 12) {
+        Toggle(isOn: $isOn) {
             Text(label).font(T.sans(15, .medium)).foregroundColor(T.ink)
                 .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            GlassToggle(isOn: $isOn)
         }
+        .toggleStyle(.switch)
+        .tint(T.controlTint)
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(label)
-        .accessibilityValue(isOn ? "On" : "Off")
-        .accessibilityHint("Double-tap to toggle.")
-    }
-}
-
-/// Custom 32×18 glass toggle, spring-animated.
-struct GlassToggle: View {
-    @Binding var isOn: Bool
-
-    @Environment(\.forgeTheme) private var T
-
-    var body: some View {
-        Button {
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { isOn.toggle() }
-        } label: {
-            ZStack(alignment: isOn ? .trailing : .leading) {
-                Capsule()
-                    .fill(isOn ? T.controlTint : T.ink4.opacity(0.4))
-                    .frame(width: 32, height: 18)
-                Circle()
-                    .fill(.white)
-                    .frame(width: 14, height: 14)
-                    .shadow(color: .black.opacity(0.18), radius: 2, y: 1)
-                    .padding(.horizontal, 2)
-            }
-            .frame(width: 44, height: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityHidden(true)
     }
 }
 

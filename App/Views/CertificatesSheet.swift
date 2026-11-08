@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Picker + manager for remembered signing certificates. Shows remaining
 /// validity per certificate, imports new .p12 files (validated against a
@@ -7,6 +8,7 @@ struct CertificatesSheet: View {
     @EnvironmentObject private var store: CertificateStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.forgeTheme) private var T
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     @State private var showImporter = false
     @State private var pendingPassword = ""
@@ -19,6 +21,15 @@ struct CertificatesSheet: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         header
+
+                        if let error {
+                            Text(error)
+                                .font(T.mono(10))
+                                .foregroundColor(T.bad)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, T.pad)
+                                .padding(.top, 16)
+                        }
 
                         if let pendingURL = store.pendingImportURL {
                             verifyCard(pendingURL)
@@ -51,18 +62,15 @@ struct CertificatesSheet: View {
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
-                .fullScreenCover(isPresented: $showImporter) {
-                    ForgeDocumentPicker {
-                        guard ["p12", "pfx"].contains($0.pathExtension.lowercased()) else {
-                            error = "Choose a .p12 or .pfx certificate."
-                            Task { @MainActor in showImporter = false }
-                            return
-                        }
-                        store.pendingImportURL = $0
-                        pendingPassword = ""
-                        error = nil
-                        Task { @MainActor in showImporter = false }
+                .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+                    guard case .success(let urls) = result, let url = urls.first else { return }
+                    guard ["p12", "pfx"].contains(url.pathExtension.lowercased()) else {
+                        error = "Choose a .p12 or .pfx certificate."
+                        return
                     }
+                    store.pendingImportURL = url
+                    pendingPassword = ""
+                    error = nil
                 }
             }
         }
@@ -79,10 +87,11 @@ struct CertificatesSheet: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(T.ink2)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 44, height: 44)
                     .fClearGlass(in: Circle(), interactive: true)
             }
             .buttonStyle(GlassTactileButtonStyle())
+            .accessibilityLabel("Close")
         }
         .padding(.horizontal, T.pad)
         .padding(.top, 24)
@@ -117,7 +126,7 @@ struct CertificatesSheet: View {
         return Button {
             store.selectedID = cert.id
         } label: {
-            HStack(spacing: 12) {
+            (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 16))
                     .foregroundColor(isSelected ? T.accent : T.ink4)
@@ -125,12 +134,12 @@ struct CertificatesSheet: View {
                     Text(cert.displayName)
                         .font(T.sans(15, .medium))
                         .foregroundColor(T.ink)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
+                        .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                    (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 6))) {
                         Text(cert.organization ?? cert.filename)
                             .font(T.mono(10))
                             .foregroundColor(T.ink3)
-                            .lineLimit(1)
+                            .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
                             .truncationMode(.middle)
                         if let team = cert.teamID {
                             Text("TEAM \(team.uppercased())")
@@ -144,7 +153,7 @@ struct CertificatesSheet: View {
                         }
                     }
                 }
-                Spacer(minLength: 8)
+                if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
                 GlassStatusPill(text: expiry.text, color: expiry.tone.color(in: T))
             }
             .padding(.horizontal, 16)
@@ -186,22 +195,15 @@ struct CertificatesSheet: View {
                         .stroke(T.rule, lineWidth: AppStroke.hairline)
                 }
 
-            HStack(spacing: 12) {
+            Toggle(isOn: $rememberPassword) {
                 Text("Remember password in Keychain")
                     .font(T.sans(13, .medium))
                     .foregroundColor(T.ink)
-                Spacer(minLength: 8)
-                GlassToggle(isOn: $rememberPassword)
             }
+            .toggleStyle(.switch)
+            .tint(T.controlTint)
 
-            if let error {
-                Text(error)
-                    .font(T.mono(10))
-                    .foregroundColor(T.bad)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            HStack(spacing: 10) {
+            (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 10)) : AnyLayout(HStackLayout(spacing: 10))) {
                 GlassSecondaryButton(label: "Cancel") {
                     store.pendingImportURL = nil
                     pendingPassword = ""

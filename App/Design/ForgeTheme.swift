@@ -34,6 +34,7 @@ extension Color {
 /// Liquid Glass surfaces over an ambient backdrop, neutral high-contrast ink,
 /// and adaptive colorless control tints in both light and dark modes.
 struct ForgeTheme {
+    var typeScale: CGFloat = 1
     // Background layers
     let bg: Color           // page background
     let surface: Color      // cards
@@ -81,8 +82,8 @@ extension ForgeTheme {
         surface3:  Color.white.opacity(0.10),
         ink:       Color(red: 0.110, green: 0.110, blue: 0.118),  // #1C1C1E
         ink2:      Color(red: 0.427, green: 0.427, blue: 0.447),  // #6D6D72
-        ink3:      Color(red: 0.557, green: 0.557, blue: 0.576),  // #8E8E93
-        ink4:      Color(red: 0.780, green: 0.780, blue: 0.800),  // #C7C7CC
+        ink3:      Color(hex: "626268"),
+        ink4:      Color(hex: "6D6D72"),
         rule:      Color.black.opacity(0.08),
         rule2:     Color.black.opacity(0.16),
         accent:    Color(hex: "4A5058"),
@@ -106,8 +107,8 @@ extension ForgeTheme {
         surface3:  Color.white.opacity(0.08),
         ink:       Color(red: 0.929, green: 0.929, blue: 0.937),
         ink2:      Color(red: 0.706, green: 0.706, blue: 0.729),
-        ink3:      Color(red: 0.510, green: 0.510, blue: 0.533),
-        ink4:      Color(red: 0.337, green: 0.337, blue: 0.357),
+        ink3:      Color(hex: "A3A3A8"),
+        ink4:      Color(hex: "99999F"),
         rule:      Color.white.opacity(0.12),
         rule2:     Color.white.opacity(0.22),
         accent:    Color(hex: "D7DCE3"),
@@ -141,17 +142,17 @@ extension ForgeTheme {
 extension ForgeTheme {
     /// Display / SF Rounded heading.
     func display(_ size: CGFloat, _ weight: Font.Weight = .semibold) -> Font {
-        .system(size: size, weight: weight, design: .rounded)
+        .system(size: size * typeScale, weight: weight, design: .rounded)
     }
 
     /// Sans body typography.
     func sans(_ size: CGFloat, _ weight: Font.Weight = .medium) -> Font {
-        .system(size: size, weight: weight, design: .default)
+        .system(size: size * typeScale, weight: weight, design: .default)
     }
 
     /// Monospaced — pervasive for values, badges, and labels.
     func mono(_ size: CGFloat, _ weight: Font.Weight = .medium) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
+        .system(size: size * typeScale, weight: weight, design: .monospaced)
     }
 }
 
@@ -173,7 +174,4 @@ extension View {
         self.environment(\.forgeTheme, theme)
     }
 
-    func forgeScaledType() -> some View {
-        self.dynamicTypeSize(...DynamicTypeSize.accessibility2)
-    }
 }

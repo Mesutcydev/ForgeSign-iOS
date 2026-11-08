@@ -6,6 +6,7 @@ import SwiftUI
 struct SourcesView: View {
     @EnvironmentObject private var store: RepositoryStore
     @Environment(\.forgeTheme) private var T
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     @State private var newRepoURL = ""
     @State private var addError: String?
@@ -18,6 +19,7 @@ struct SourcesView: View {
                     VStack(spacing: 0) {
                         header
                         addSection
+                        if store.activeDownloadID != nil { RepositoryDownloadView() }
                         if let addError {
                             Text(addError)
                                 .font(T.mono(10))
@@ -111,7 +113,7 @@ struct SourcesView: View {
         Button {
             selectedRepo = repo
         } label: {
-            HStack(spacing: 12) {
+            (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))) {
                 Image(systemName: "shippingbox.fill")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(T.accent2)
@@ -122,16 +124,16 @@ struct SourcesView: View {
                     Text(repo.name)
                         .font(T.sans(15, .medium))
                         .foregroundColor(T.ink)
-                        .lineLimit(1)
+                        .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                         .truncationMode(.middle)
                     Text(repo.url.host ?? repo.url.absoluteString)
                         .font(T.mono(10))
                         .foregroundColor(T.ink3)
-                        .lineLimit(1)
+                        .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                         .truncationMode(.middle)
                 }
 
-                Spacer(minLength: 8)
+                if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
 
                 if let count = store.catalog[repo.id]?.apps.count {
                     GlassStatusPill(text: "\(count) apps", color: T.accent)
@@ -169,6 +171,7 @@ struct RepoDetailSheet: View {
 
     @EnvironmentObject private var store: RepositoryStore
     @Environment(\.forgeTheme) private var T
+    @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.dismiss) private var dismiss
 
     @State private var selectedApp: RepoApp?
@@ -179,6 +182,7 @@ struct RepoDetailSheet: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         header
+                        if store.activeDownloadID != nil { RepositoryDownloadView() }
                         content
                     }
                     .padding(.bottom, 30)
@@ -209,10 +213,11 @@ struct RepoDetailSheet: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(T.ink2)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 44, height: 44)
                     .fClearGlass(in: Circle(), interactive: true)
             }
             .buttonStyle(GlassTactileButtonStyle())
+            .accessibilityLabel("Close")
         }
         .padding(.horizontal, T.pad)
         .padding(.top, 24)
@@ -287,15 +292,15 @@ struct RepoDetailSheet: View {
     }
 
     private func appRow(_ app: RepoApp) -> some View {
-        HStack(spacing: 12) {
+        (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))) {
             appIcon(app)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(app.name)
                     .font(T.sans(15, .medium))
                     .foregroundColor(T.ink)
-                    .lineLimit(1)
-                HStack(spacing: 6) {
+                    .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 6))) {
                     if let version = app.version {
                         Text("v\(version)").font(T.mono(10)).foregroundColor(T.ink3)
                     }
@@ -305,24 +310,22 @@ struct RepoDetailSheet: View {
                     }
                     if let dev = app.developerName {
                         Text(dev).font(T.mono(10)).foregroundColor(T.ink4)
-                            .lineLimit(1).truncationMode(.tail)
+                            .lineLimit(typeSize.isAccessibilitySize ? nil : 2).truncationMode(.tail)
                     }
                     if app.versions.count > 1 {
                         Text("\(app.versions.count) versions")
                             .font(T.mono(9))
                             .foregroundColor(T.accent2)
                     }
-                    if let description = app.localizedDescription, !description.isEmpty {
-                        Text(description)
-                            .font(T.mono(9))
-                            .foregroundColor(T.ink4)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
+                }
+                if let description = app.localizedDescription, !description.isEmpty {
+                    Text(description)
+                        .font(T.mono(9)).foregroundColor(T.ink3)
+                        .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                 }
             }
 
-            Spacer(minLength: 8)
+            if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
 
             Button {
                 selectedApp = app
@@ -330,10 +333,11 @@ struct RepoDetailSheet: View {
                 Image(systemName: "info.circle")
                     .font(.system(size: 15, weight: .medium))
                     .foregroundColor(T.ink3)
-                    .frame(width: 28, height: 32)
+                    .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
             .buttonStyle(GlassTactileButtonStyle())
+            .accessibilityLabel("View app details")
 
             getButton(app)
         }
@@ -342,16 +346,7 @@ struct RepoDetailSheet: View {
     }
 
     private func appIcon(_ app: RepoApp) -> some View {
-        AsyncImage(url: app.iconURL) { phase in
-            switch phase {
-            case .success(let image):
-                image.resizable().aspectRatio(contentMode: .fill)
-            default:
-                Image(systemName: "app.fill")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(T.accent2)
-            }
-        }
+        RepositoryIcon(url: app.iconURL)
         .frame(width: 38, height: 38)
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .fClearGlass(in: RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -360,7 +355,10 @@ struct RepoDetailSheet: View {
     @ViewBuilder
     private func getButton(_ app: RepoApp) -> some View {
         if store.activeDownloadID == app.id {
-            ProgressView().tint(T.accent).frame(width: 52)
+            Button("Cancel", role: .cancel) { store.cancelDownload() }
+                .font(T.sans(12, .semibold))
+                .frame(minWidth: 44, minHeight: 44)
+                .accessibilityLabel("Cancel download of \(app.name)")
         } else {
             Button {
                 Task { await store.download(app) }
@@ -376,7 +374,7 @@ struct RepoDetailSheet: View {
                     }
             }
             .buttonStyle(GlassTactileButtonStyle())
-            .disabled(app.downloadURL == nil || store.activeDownloadID != nil)
+            .disabled(app.downloadURL == nil || store.activeDownloadID != nil || store.pendingIPA != nil)
         }
     }
 }
@@ -387,6 +385,7 @@ struct RepoAppDetailSheet: View {
     let app: RepoApp
 
     @Environment(\.forgeTheme) private var T
+    @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -473,17 +472,18 @@ struct RepoAppDetailSheet: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(T.ink2)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 44, height: 44)
                     .fClearGlass(in: Circle(), interactive: true)
             }
             .buttonStyle(GlassTactileButtonStyle())
+            .accessibilityLabel("Close")
         }
         .padding(.horizontal, T.pad)
         .padding(.top, 24)
     }
 
     private var summary: some View {
-        HStack(spacing: 12) {
+        (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))) {
             appIcon
             VStack(alignment: .leading, spacing: 4) {
                 Text(app.name)
@@ -502,16 +502,7 @@ struct RepoAppDetailSheet: View {
     }
 
     private var appIcon: some View {
-        AsyncImage(url: app.iconURL) { phase in
-            switch phase {
-            case .success(let image):
-                image.resizable().aspectRatio(contentMode: .fill)
-            default:
-                Image(systemName: "app.fill")
-                    .font(.system(size: 18, weight: .medium))
-                    .foregroundColor(T.accent2)
-            }
-        }
+        RepositoryIcon(url: app.iconURL, symbolSize: 24)
         .frame(width: 58, height: 58)
         .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
         .fClearGlass(in: RoundedRectangle(cornerRadius: 15, style: .continuous))
@@ -526,6 +517,35 @@ struct RepoAppDetailSheet: View {
                 .multilineTextAlignment(.trailing)
                 .truncationMode(.middle)
                 .frame(maxWidth: 190, alignment: .trailing)
+        }
+    }
+}
+
+/// Visible in both the Sources tab and an open repository sheet, so a download
+/// can always be cancelled after leaving the app's row.
+private struct RepositoryDownloadView: View {
+    @EnvironmentObject private var store: RepositoryStore
+    @Environment(\.forgeTheme) private var T
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        GlassSection("Download") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(store.downloadName)
+                    .font(T.sans(15, .semibold))
+                    .foregroundStyle(T.ink)
+                    .lineLimit(2)
+                ProgressView(value: store.downloadProgress?.fraction)
+                    .tint(T.accent)
+                    .accessibilityLabel("Download progress")
+                Text(store.downloadProgress?.description ?? "Connecting…")
+                    .font(T.mono(12))
+                    .foregroundStyle(T.ink2)
+                Button("Cancel download", role: .cancel) { store.cancelDownload() }
+                    .font(T.sans(13, .semibold))
+                    .frame(minHeight: 44)
+            }
+            .padding(16)
         }
     }
 }

@@ -145,6 +145,13 @@ final class LocalInstallServer: @unchecked Sendable {
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuse, socklen_t(MemoryLayout<Int32>.size))
         var noSigPipe: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSigPipe, socklen_t(MemoryLayout<Int32>.size))
+        // Non-blocking listener: the accept loop polls with a timeout so stop()
+        // ends the thread promptly. A blocking accept would stay parked on a
+        // closed fd until the next connection (an fd-reuse hazard).
+        let flags = fcntl(fd, F_GETFL, 0)
+        if flags >= 0 {
+            _ = fcntl(fd, F_SETFL, flags | O_NONBLOCK)
+        }
 
         var addr = sockaddr_in()
         addr.sin_family = sa_family_t(AF_INET)
@@ -220,12 +227,34 @@ final class LocalInstallServer: @unchecked Sendable {
             let shouldRun = state.withLock { $0.running && $0.listenerFD == fd }
             guard shouldRun else { break }
 
+            var pollSet = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&pollSet, 1, 500)
+            guard ready > 0, pollSet.revents & Int16(POLLIN) != 0 else { continue }
+
             let client = accept(fd, nil, nil)
             if client >= 0 {
-                connectionQueue.async { [weak self] in
-                    self?.handleConnection(client)
+                // Darwin inherits O_NONBLOCK from the listener. The worker's
+                // recv/send loops require blocking sockets: an accepted TCP
+                // connection may not have sent its HTTP headers yet.
+                let flags = fcntl(client, F_GETFL, 0)
+                guard flags >= 0, fcntl(client, F_SETFL, flags & ~O_NONBLOCK) == 0 else {
+                    close(client)
+                    continue
                 }
-            } else {
+                var noSignal: Int32 = 1
+                var readTimeout = timeval(tv_sec: 15, tv_usec: 0)
+                var writeTimeout = timeval(tv_sec: 30, tv_usec: 0)
+                guard setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0,
+                      setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &readTimeout, socklen_t(MemoryLayout<timeval>.size)) == 0,
+                      setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &writeTimeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+                    close(client)
+                    continue
+                }
+                connectionQueue.async { [weak self] in
+                    guard let self else { close(client); return }
+                    self.handleConnection(client)
+                }
+            } else if errno != EAGAIN && errno != EWOULDBLOCK {
                 Thread.sleep(forTimeInterval: 0.05)
             }
         }
@@ -238,6 +267,7 @@ final class LocalInstallServer: @unchecked Sendable {
         var raw = [UInt8](repeating: 0, count: 4096)
         while buffer.count < 64 * 1024 {
             let n = recv(fd, &raw, raw.count, 0)
+            if n < 0, errno == EINTR { continue }
             if n <= 0 { return }
             buffer.append(contentsOf: raw[0..<n])
             if buffer.range(of: Data("\r\n\r\n".utf8)) != nil { break }
@@ -310,6 +340,7 @@ final class LocalInstallServer: @unchecked Sendable {
             guard let base = raw.baseAddress else { return }
             while sent < data.count {
                 let n = send(fd, base.advanced(by: sent), data.count - sent, 0)
+                if n < 0, errno == EINTR { continue }
                 if n <= 0 {
                     success = false
                     return
@@ -371,7 +402,7 @@ final class LocalInstallServer: @unchecked Sendable {
         if headOnly { try? handle.close(); return }
 
         var remaining = resolved.length
-        while remaining > 0 {
+        while remaining > 0, state.withLock({ $0.running }) {
             let chunk = handle.readData(ofLength: Int(min(UInt64(1024 * 1024), remaining)))
             guard !chunk.isEmpty, UInt64(chunk.count) <= remaining, sendAll(fd, chunk) else { break }
             let offset = resolved.offset + (resolved.length - remaining)

@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Picker + manager for remembered provisioning profiles. Shows remaining
 /// validity per profile (often fixed at 365 days) and imports new
@@ -7,6 +8,7 @@ struct ProfilesSheet: View {
     @EnvironmentObject private var store: ProfileStore
     @Environment(\.dismiss) private var dismiss
     @Environment(\.forgeTheme) private var T
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     @State private var showImporter = false
     @State private var error: String?
@@ -54,16 +56,13 @@ struct ProfilesSheet: View {
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
-                .fullScreenCover(isPresented: $showImporter) {
-                    ForgeDocumentPicker {
-                        guard $0.pathExtension.lowercased() == "mobileprovision" else {
-                            error = "Choose a .mobileprovision file."
-                            Task { @MainActor in showImporter = false }
-                            return
-                        }
-                        importProfile(from: $0)
-                        Task { @MainActor in showImporter = false }
+                .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+                    guard case .success(let urls) = result, let url = urls.first else { return }
+                    guard url.pathExtension.lowercased() == "mobileprovision" else {
+                        error = "Choose a .mobileprovision file."
+                        return
                     }
+                    importProfile(from: url)
                 }
             }
         }
@@ -80,10 +79,11 @@ struct ProfilesSheet: View {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(T.ink2)
-                    .frame(width: 30, height: 30)
+                    .frame(width: 44, height: 44)
                     .fClearGlass(in: Circle(), interactive: true)
             }
             .buttonStyle(GlassTactileButtonStyle())
+            .accessibilityLabel("Close")
         }
         .padding(.horizontal, T.pad)
         .padding(.top, 24)
@@ -118,7 +118,7 @@ struct ProfilesSheet: View {
         return Button {
             store.select(profile.id)
         } label: {
-            HStack(spacing: 12) {
+            (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 16))
                     .foregroundColor(isSelected ? T.accent : T.ink4)
@@ -126,15 +126,15 @@ struct ProfilesSheet: View {
                     Text(profile.displayName)
                         .font(T.sans(15, .medium))
                         .foregroundColor(T.ink)
-                        .lineLimit(1)
-                    HStack(spacing: 6) {
+                        .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                    (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 6))) {
                         Text(profile.applicationIdentifier ?? profile.filename)
                             .font(T.mono(10))
                             .foregroundColor(T.ink3)
-                            .lineLimit(1)
+                            .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
                             .truncationMode(.middle)
                         if let devices = profile.provisionedDeviceCount {
-                            Text("\(devices) DEVICES")
+                            Text(devices == 1 ? "1 DEVICE" : "\(devices) DEVICES")
                                 .font(T.mono(8))
                                 .foregroundColor(T.ink3)
                         } else if profile.provisionsAllDevices == true {
@@ -144,7 +144,7 @@ struct ProfilesSheet: View {
                         }
                     }
                 }
-                Spacer(minLength: 8)
+                if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
                 GlassStatusPill(text: expiry.text, color: expiry.tone.color(in: T))
             }
             .padding(.horizontal, 16)

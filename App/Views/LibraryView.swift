@@ -5,13 +5,16 @@ import SwiftUI
 struct LibraryView: View {
     @EnvironmentObject private var history: HistoryStore
     @EnvironmentObject private var refreshSources: RefreshSourceStore
+    @EnvironmentObject private var installCoordinator: InstallCoordinator
     @Environment(\.forgeTheme) private var T
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var onInstall: (SigningRecord) -> Void = { _ in }
     var onRefresh: (SigningRecord) -> Void = { _ in }
 
     @State private var activeRecord: SigningRecord?
     @State private var shareRecord: SigningRecord?
+    @State private var deleteError = false
     @AppStorage("retainRefreshSources") private var retainRefreshSources = false
 
     private var scan: RefreshScan { RefreshScanner.scan(history.records) }
@@ -22,6 +25,10 @@ struct LibraryView: View {
                 ScrollView {
                     VStack(spacing: 0) {
                         header
+                        if installCoordinator.phase != .idle {
+                            installationStatus
+                        }
+                        LibraryStorageView()
 
                         if history.records.isEmpty {
                             emptyState
@@ -59,13 +66,25 @@ struct LibraryView: View {
                     Button("Refresh — re-sign \(refreshSources.sourceName(for: record.id) ?? "the kept original")") {
                         onRefresh(record)
                     }
-                    Button("Drop kept original") { refreshSources.removeSource(for: record.id) }
+                    Button("Drop kept original") {
+                        refreshSources.removeSource(for: record.id)
+                        history.setRefreshSourceName(nil, for: record.id)
+                    }
                 }
-                if history.fileExists(for: record) {
-                    Button("Delete signed IPA", role: .destructive) { history.delete(record) }
-                } else {
-                    Button("Remove from Library", role: .destructive) { history.delete(record) }
+                if history.fileExists(for: record) && !installCoordinator.isInstalling {
+                    Button("Delete signed IPA", role: .destructive) {
+                        deleteRecord(record)
+                    }
+                } else if !installCoordinator.isInstalling {
+                    Button("Remove from Library", role: .destructive) {
+                        deleteRecord(record)
+                    }
                 }
+            }
+            .alert("Could not delete signed IPA", isPresented: $deleteError) {
+                Button("OK", role: .cancel) { deleteError = false }
+            } message: {
+                Text("The file is still in ForgeSign storage. Try again after the current operation finishes.")
             }
             .sheet(item: $shareRecord) { record in
                 ShareSheet(items: [history.outputURL(for: record)])
@@ -128,11 +147,36 @@ struct LibraryView: View {
         .padding(.top, 24)
     }
 
+    private var installationStatus: some View {
+        GlassSection("Installation") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(installCoordinator.phase.label)
+                    .font(T.sans(15, .semibold))
+                    .foregroundColor(T.ink)
+                    .accessibilityAddTraits(.updatesFrequently)
+                Text(installCoordinator.statusMessage)
+                    .font(T.sans(13))
+                    .foregroundColor(T.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+                if installCoordinator.isInstalling {
+                    GlassSecondaryButton(label: "Cancel Install", systemImage: "xmark.circle") {
+                        installCoordinator.cancel()
+                    }
+                } else if installCoordinator.lastError != nil {
+                    GlassSecondaryButton(label: "Try Again", systemImage: "arrow.clockwise") {
+                        installCoordinator.retry()
+                    }
+                }
+            }
+            .padding(16)
+        }
+    }
+
     private func row(_ record: SigningRecord) -> some View {
         Button {
             activeRecord = record
         } label: {
-            HStack(spacing: 12) {
+            (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))) {
                 Image(systemName: "app.fill")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundColor(T.accent2)
@@ -143,13 +187,13 @@ struct LibraryView: View {
                     Text(record.outputName)
                         .font(T.mono(12, .medium))
                         .foregroundColor(T.ink)
-                        .lineLimit(1)
+                        .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                         .truncationMode(.middle)
-                    HStack(spacing: 6) {
+                    (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 6)) : AnyLayout(HStackLayout(spacing: 6))) {
                         Text(record.bundleId)
                             .font(T.mono(10, .medium))
                             .foregroundColor(T.ink3)
-                            .lineLimit(1)
+                            .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
                             .truncationMode(.middle)
                         if !record.version.isEmpty {
                             Text("v\(record.version)")
@@ -161,7 +205,7 @@ struct LibraryView: View {
                         Text(certificateCN)
                             .font(T.mono(9))
                             .foregroundColor(T.ink4)
-                            .lineLimit(1)
+                            .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
                             .truncationMode(.tail)
                     }
                     if let expiryText = RefreshPlanner.expiryText(record.profileExpiresAt) {
@@ -171,9 +215,9 @@ struct LibraryView: View {
                     }
                 }
 
-                Spacer(minLength: 8)
+                if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
 
-                VStack(alignment: .trailing, spacing: 4) {
+                VStack(alignment: typeSize.isAccessibilitySize ? .leading : .trailing, spacing: 4) {
                     statusPill(record)
                     refreshPill(record)
                     Text(record.date.formatted(date: .abbreviated, time: .shortened))
@@ -191,7 +235,8 @@ struct LibraryView: View {
     @ViewBuilder
     private func statusPill(_ record: SigningRecord) -> some View {
         if !history.fileExists(for: record) {
-            GlassStatusPill(text: "missing", color: T.warn)
+            GlassStatusPill(text: record.signedCopyRemovedAt == nil ? "missing" : "copy cleared",
+                            color: T.warn)
         } else {
             switch record.installState {
             case .signed:
@@ -224,5 +269,13 @@ struct LibraryView: View {
         let interval = expiry.timeIntervalSinceNow
         if interval <= 0 { return T.bad }
         return interval <= RefreshPlanner.refreshWindow ? T.warn : T.ink3
+    }
+
+    private func deleteRecord(_ record: SigningRecord) {
+        if history.delete(record) {
+            refreshSources.removeSource(for: record.id)
+        } else {
+            deleteError = true
+        }
     }
 }

@@ -15,7 +15,9 @@ final class ImportRouter: ObservableObject {
         switch ext {
         case "ipa", "zip": pending = .ipa(url)
         case "dylib": pending = .dylib(url)
-        default: pending = nil
+        default: break
+        // An unrelated URL must not drop a valid pending import that the
+        // Sign tab has not consumed yet.
         }
     }
 

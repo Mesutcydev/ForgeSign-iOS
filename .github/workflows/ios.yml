@@ -2,20 +2,30 @@ name: ForgeSign iOS
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'release/**']
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   validate:
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Show Xcode toolchain
         run: xcodebuild -version
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install build and native test dependencies
+        run: brew install xcodegen openssl@3
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Prepare checksum-pinned signing dependencies
+        run: python3 scripts/prepare_dependencies.py
 
       - name: Generate project
         run: xcodegen generate
@@ -25,6 +35,12 @@ jobs:
 
       - name: Test IPA packaging
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Test native signing invariants
+        run: |
+          bash scripts/test_signer_identity.sh
+          bash scripts/test_signer_resources.sh
+          bash scripts/test_crypto.sh
 
       - name: Select available simulator
         run: |
@@ -38,6 +54,7 @@ jobs:
             -project ForgeSignMobile.xcodeproj \
             -scheme ForgeSignMobileTests \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
 
@@ -65,3 +82,11 @@ jobs:
           python3 scripts/package_ipa.py validate build/ForgeSign-latest.ipa
           unzip -Z1 build/ForgeSign-latest.ipa | grep -Fx 'Payload/ForgeSign.app/ForgeSign'
           ! unzip -Z1 build/ForgeSign-latest.ipa | grep -E '\.(debug\.dylib|preview\.dylib)$'
+
+      - name: Upload validated unsigned IPA
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ForgeSign-latest
+          path: build/ForgeSign-latest.ipa
+          if-no-files-found: error
+          retention-days: 14

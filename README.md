@@ -2,9 +2,9 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign and prepare IPAs on-device; installation uses a loopback server and a trusted remote HTTPS manifest, with no certificate or app-content upload.
 
-**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 2.7](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.7/ForgeSign-2.7.ipa)**
+**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download the latest unsigned IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)**
 
-ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
+ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a shared OpenSSL 3.5 LTS framework) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
 <p align="center">
   <img src="docs/screenshot-sign.png" alt="ForgeSign Sign tab — on-device IPA signer" width="280" />
@@ -22,33 +22,36 @@ ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ e
 - **Keychain passwords** — opt-in password storage only in the device-bound iOS Keychain; if Keychain storage is unavailable, ForgeSign asks for the password again.
 - **Install on device** — semi-local OTA install: the IPA is served over loopback HTTP while a trusted remote HTTPS plist (`api.palera.in`) drives `itms-services` directly (Safari is a fallback only). The external manifest service receives install metadata and the local package URL.
 - **Visible install handoff** — ForgeSign stays on the Result screen, shows when iOS requests and downloads the IPA, and keeps Cancel and Safari fallback available while waiting. iOS controls its own final installation progress and may open the Home Screen after the system prompt.
-- **Library** — a persistent history of every signed app with status (signed / installing / delivered / installed / missing), plus reinstall, share and delete actions.
+- **Library** — a persistent history of every signed app with status (signed / installing / delivered / installed / missing), plus reinstall, share and delete actions. Its Storage section shows the space used by signed IPAs, repository downloads, kept originals and the current signing input. You can clear delivered or all signed copies, downloads, originals and the current input separately. Clearing a signed copy keeps its history entry and does not remove the app installed by iOS; sharing or reinstalling that copy requires signing again.
+- **Responsive imports** — large IPA/dylib copies and kept originals run off the main thread, with progress and cancellation. A failed or cancelled import preserves the previous input.
 - **IPA preflight** — package, bundle, encryption and architecture signals are shown before a signing run.
 - **Per-bundle provisioning audit** — the app and every extension show their resolved bundle ID and matching-profile status before signing; only the profiles needed by that IPA are passed to the signer.
 - **Optional Apple Account provisioning** — ForgeSign can create matching profiles for the app, extensions, and File Provider / attachment bundles. Apple sign-in data (anisette) comes from the source you pick: a community anisette server, a server you run yourself, AltServer on your local network, or this iPhone. A remote anisette server means no Mac is required. Manual imported-profile signing remains available.
-- **Sources** — save repository feeds and hand selected IPA downloads into the normal signing flow.
+- **Sources** — save repository feeds and hand selected IPA downloads into the normal signing flow. Downloads enforce a 2 GB limit while streaming, show progress, and can be cancelled. Icons use bounded HTTPS transfers and are downsampled before display.
 - **Optional dylib injection** — inject a compatible decrypted dylib into the app, with an opt-in app-extension path, before signing. The original IPA is left untouched.
-- **Glass design language** — lighter translucent cards, ambient color blooms, Liquid Glass on iOS 26+ with a material fallback back to iOS 16, light and dark themes.
+- **Accessible adaptive design** — clear Liquid Glass cards and controls on iOS 26+, light and dark themes, Dynamic Type, native switches, labeled fields, and solid surfaces for Reduce Transparency and adaptive glass for Increase Contrast.
 
 ## Requirements
 
 - Xcode 26+ (the build needs the iOS 26 SDK for the Liquid Glass APIs; deployment target is iOS 16)
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`)
+- Python 3.12+ and Perl/make (dependency bootstrap)
 - iOS 16.0+ on device
 - Optional: AltServer on the same local network, or an anisette server. A community anisette server is used by default, so a Mac is not required for Apple Account provisioning.
 
 ## Build from source
 
 ```bash
+python3 scripts/prepare_dependencies.py
 xcodegen generate
 open ForgeSignMobile.xcodeproj
 ```
 
 Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the project settings by design — sign the produced app with your own certificate and profile (ForgeSign desktop can do it, or any sideloading tool).
 
-The device target pins the last AltSign Swift Package revision whose Apple Account authentication path remains enabled. Its scheme pre-action repairs a stale OpenSSL folder reference in that upstream package before compilation.
+The bootstrap verifies every source archive against `scripts/dependencies/lock.json`. It builds OpenSSL 3.5.9 from source for iOS arm64 and the host's simulator/macOS architecture, then prepares the pinned authentication-enabled AltSign package locally. Both AltSign and zsign use one embedded OpenSSL framework, with built-in default and legacy providers for modern and older P12 files. Generated dependencies are ignored by Git; rerun the bootstrap after changing the recipe, source pins or Xcode toolchain. No recursive Git clone or scheme-time dependency mutation is required.
 
-The device scheme also applies the experimental `vendor/altsign-gsa-http503.patch`. It ports the current AltSign GSA workaround: a modern AuthKit User-Agent, a fresh connection for each authentication request, bounded retries for Apple 5xx responses, and safe HTML-response diagnostics. Remove that patch and its pre-action block if upstream AltSign ships the fix.
+The bootstrap preserves the experimental `vendor/altsign-gsa-http503.patch`: a modern AuthKit User-Agent, a fresh connection per authentication request, bounded retries for Apple 5xx responses, and safe HTML-response diagnostics. Authentication still requires testing with a real account and 2FA. The compatibility patch also checks malformed/incorrect-password P12 imports before accessing their key or certificate.
 
 Package a device build with the checked packaging script (the output must not already exist):
 
@@ -59,9 +62,26 @@ python3 scripts/package_ipa.py validate ForgeSign.ipa
 
 This excludes Finder metadata and AppleDouble resource forks (`._*`, including misleading `Payload/._ForgeSign.app` entries), preserves executable permissions, and validates the single-app Payload. For an existing IPA, use `repack INPUT.ipa OUTPUT.ipa`; all retained app contents are verified byte-for-byte. Packaging validation does not test Apple authentication or prove installation on a device.
 
+Run the local packaging and native signing regressions with:
+
+```bash
+brew install openssl@3
+python3 -m unittest discover -s scripts -p 'test_*.py'
+bash scripts/test_signer_identity.sh
+bash scripts/test_signer_resources.sh
+bash scripts/test_crypto.sh
+```
+
+The resource test uses host OpenSSL (override its path with
+`FORGESIGN_TEST_OPENSSL_ROOT`). The crypto smoke test uses the freshly built
+framework and the patched AltSign certificate importer, including modern and
+legacy P12s, incorrect passwords, malformed input and CMS signatures.
+See [the November 2026 iOS audit](AUDIT_2026-11-08.md) for fixes, validation limits,
+and remaining device/account validation.
+
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-2.7.ipa` from [ForgeSign 2.7](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.7). The IPA ships **unsigned** — sign it with your own certificate and provisioning profile before installing.
+Grab `ForgeSign-latest.ipa` from [the latest release](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest). The IPA ships **unsigned** — sign it with your own certificate and provisioning profile before installing.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
@@ -120,6 +140,19 @@ installed as an upgrade so app data survives.
 - Expiry scanning runs in the foreground. Background execution is **not**
   claimed: a sideloaded app cannot rely on `BGTaskScheduler`, and ForgeSign does
   not pretend otherwise.
+
+## What’s new in 2.8
+
+- Reliable OTA connections, partial downloads and cancellation, with install retry and recovery in Library.
+- Byte progress and Cancel for repository downloads and background input copies; failed imports preserve the previous selection.
+- Stronger preflight/profile checks, encrypted-package blocking, and reliable certificate/profile import sheets.
+- Storage controls for signed copies, downloads, kept originals and the current input.
+- Clear Liquid Glass, native accessible switches, Dynamic Type and layouts for long names.
+- Fixes iOS 27 clean launches and an expiry-check crash on early iOS 27.2 betas.
+- One shared OpenSSL 3.5.9 LTS framework for both signing engines, built from checksum-pinned sources.
+- Validated with 79 simulator tests and manual signing, verification, OTA installation and launch on a registered iPhone.
+
+[Full release notes](WHATS_NEW.md) · [Download the latest IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)
 
 ## What’s new in 2.7
 
@@ -243,12 +276,12 @@ installed as an upgrade so app data survives.
 App/            SwiftUI UI (glass design system in App/Design), stores and services
 Bridge/         Obj-C++ bridge into the zsign engine
 vendor/zsign    Vendored zsign signing engine
-vendor/openssl  Static OpenSSL (libcrypto/libssl) for the engine
+vendor/openssl  Generated shared OpenSSL framework and license
 project.yml     XcodeGen manifest (regenerates the .xcodeproj)
 ```
 
 ## Third-party
 
 - [zsign](https://github.com/zhlynn/zsign) — signing engine (vendored)
-- [OpenSSL](https://www.openssl.org) — static cryptography libraries (vendored)
+- [OpenSSL](https://www.openssl.org) — checksum-pinned 3.5 LTS source build
 - [AltSign](https://github.com/rileytestut/AltSign) — Apple-account and provisioning API integration (Swift Package, pinned revision)

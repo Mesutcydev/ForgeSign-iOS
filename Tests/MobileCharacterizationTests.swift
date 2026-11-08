@@ -4,6 +4,13 @@ import Testing
 
 @Suite("Mobile characterization")
 struct MobileCharacterizationTests {
+    @Test("SwiftUI declares its scene lifecycle for clean launches")
+    func sceneLifecycleRegistration() throws {
+        let manifest = try #require(Bundle.main.object(forInfoDictionaryKey: "UIApplicationSceneManifest") as? [String: Any])
+        // The signing workspace and installer have one owner per process.
+        #expect(manifest["UIApplicationSupportsMultipleScenes"] as? Bool == false)
+    }
+
     @Test("IPA files expose ForgeSign from the Files preview")
     func ipaFilesQuickActionRegistration() throws {
         let documentTypes = try #require(
@@ -415,6 +422,48 @@ struct MobileCharacterizationTests {
         #expect(audit.rows.first?.profileID == wildcardProfile.id)
     }
 
+    @Test("A profile with no device list warns instead of green-lighting a known device")
+    func provisioningAuditWarnsOnMissingDeviceCoverage() {
+        // Same wildcard shape as above but with the device list stripped, the
+        // omission ProfileStore.refreshed defends against. With the device
+        // known, membership cannot be confirmed.
+        let listed = profile(name: "Wildcard", appID: "TEAM.com.original.demo.*")
+        let unlisted = ProfileRecord(id: UUID(), filename: listed.filename,
+                                     name: listed.name, teamID: listed.teamID,
+                                     applicationIdentifier: listed.applicationIdentifier,
+                                     notAfter: listed.notAfter, provisionedDeviceCount: 0,
+                                     provisionsAllDevices: false, getTaskAllow: listed.getTaskAllow,
+                                     profileUUID: listed.profileUUID, provisionedDevices: [],
+                                     appGroups: listed.appGroups,
+                                     keychainAccessGroups: listed.keychainAccessGroups,
+                                     developerCertificateSHA256: listed.developerCertificateSHA256,
+                                     profileIsAuthentic: true, addedAt: listed.addedAt)
+        func audit(_ profileRecord: ProfileRecord, deviceIdentifier: String?) -> ProvisioningAudit {
+            ProvisioningAuditService.makeAudit(
+                inspection: IPAPreflight(
+                    appName: "Demo", bundleIdentifier: "com.original.demo",
+                    shortVersion: "1.0", buildVersion: "1", minimumOSVersion: nil,
+                    nestedBundleCount: 0, extensionCount: 0, frameworkCount: 0,
+                    watchAppCount: 0, totalMachOCount: 1, signedMachOCount: 0,
+                    encryptedExecutableCount: 0, encryptedPaths: [],
+                    bundles: [SignableBundleInspection(
+                        path: "/", kind: .app, bundleIdentifier: "com.original.demo",
+                        entitlementsAvailable: true, requiredAppGroups: [],
+                        requiredKeychainAccessGroups: [])],
+                    archiveBytes: 1
+                ),
+                profiles: [profileRecord], preferredProfileID: profileRecord.id,
+                certificate: certificate(), requestedBundleID: "",
+                removeExtensions: false, deviceIdentifier: deviceIdentifier
+            )
+        }
+
+        #expect(audit(unlisted, deviceIdentifier: "DEVICE").rows.first?.state == .warning)
+        // Without a device identifier the characterized .ready behavior stands.
+        #expect(audit(unlisted, deviceIdentifier: nil).isReady)
+        #expect(audit(listed, deviceIdentifier: "DEVICE").isReady)
+    }
+
     @Test("One matching wildcard profile can cover an app and its extension")
     func provisioningAuditMatchesWildcardExtension() {
         let wildcardProfile = profile(name: "Wildcard", appID: "TEAM.com.resigned.demo.*",
@@ -617,9 +666,45 @@ struct MobileCharacterizationTests {
         )
     }
 
-    private func certificate() -> CertificateRecord {
+    @Test("Removing extensions cannot repair a blocked root app")
+    func extensionRecoveryRequiresUsableRoot() {
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: inspectionWithExtension(), profiles: [],
+            preferredProfileID: nil, certificate: certificate(), requestedBundleID: "",
+            removeExtensions: false, deviceIdentifier: "DEVICE"
+        )
+        #expect(!audit.onlyExtensionsBlocked)
+    }
+
+    @Test("The audit omits an unrelated selected root profile")
+    func auditUsesMatchingRootProfile() {
+        let unrelated = profile(name: "Unrelated", appID: "TEAM.com.other.app")
+        let matching = profile(name: "Matching", appID: "TEAM.com.original.*", groups: ["group.original.shared"])
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: inspectionWithExtension(), profiles: [unrelated, matching],
+            preferredProfileID: unrelated.id, certificate: certificate(), requestedBundleID: "",
+            removeExtensions: false, deviceIdentifier: "DEVICE"
+        )
+        #expect(audit.isReady)
+        #expect(audit.selectedProfileIDs == [matching.id])
+    }
+
+    @Test("An expired certificate blocks otherwise compatible profiles")
+    func auditRejectsExpiredCertificate() {
+        let matching = profile(name: "Matching", appID: "TEAM.com.original.*", groups: ["group.original.shared"])
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: inspectionWithExtension(), profiles: [matching],
+            preferredProfileID: matching.id, certificate: certificate(notAfter: .distantPast), requestedBundleID: "",
+            removeExtensions: false, deviceIdentifier: "DEVICE"
+        )
+        #expect(!audit.isReady)
+        #expect(audit.rows.first?.state == .expired)
+        #expect(audit.rows.first?.detail.contains("certificate") == true)
+    }
+
+    private func certificate(notAfter: Date = .distantFuture) -> CertificateRecord {
         CertificateRecord(id: UUID(), filename: "test.p12", commonName: "Test",
-                          organization: "Test", teamID: "TEAM", notAfter: .distantFuture,
+                          organization: "Test", teamID: "TEAM", notAfter: notAfter,
                           certificateSHA256: "certificate", addedAt: .now,
                           hasSavedPassword: false)
     }
@@ -712,7 +797,98 @@ struct RefreshPlanningTests {
         let record = try decoder.decode(SigningRecord.self, from: Data(legacy.utf8))
         #expect(record.profileExpiresAt == nil)
         #expect(record.refreshSourceName == nil)
+        #expect(record.signedCopyRemovedAt == nil)
         #expect(record.installState == .signed)
+    }
+}
+
+@Suite("Library storage cleanup")
+@MainActor
+struct LibraryStorageCleanupTests {
+    @Test("Delivered cleanup preserves history and leaves unsigned install attempts")
+    func deliveredCopies() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("library-cleanup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let history = HistoryStore(baseDirectory: base)
+        let delivered = history.append(inputName: "delivered.ipa", outputName: "delivered-signed.ipa",
+                                       bundleId: "com.example.delivered", version: "1", certificateCN: nil)
+        let waiting = history.append(inputName: "waiting.ipa", outputName: "waiting-signed.ipa",
+                                     bundleId: "com.example.waiting", version: "1", certificateCN: nil)
+        try Data(repeating: 0x41, count: 2_000).write(to: history.outputURL(for: delivered))
+        try Data(repeating: 0x42, count: 3_000).write(to: history.outputURL(for: waiting))
+        history.setInstallState(.delivered, for: delivered.id)
+
+        #expect(history.signedCopyBytes == 5_000)
+        #expect(history.deliveredCopyBytes == 2_000)
+        let result = history.clearSignedCopies(deliveredOnly: true)
+        #expect(result.removed == 1 && result.failed == 0)
+        #expect(!FileManager.default.fileExists(atPath: history.outputURL(for: delivered).path))
+        #expect(FileManager.default.fileExists(atPath: history.outputURL(for: waiting).path))
+        #expect(history.records.count == 2)
+        #expect(history.records.first(where: { $0.id == delivered.id })?.signedCopyRemovedAt != nil)
+        #expect(history.records.first(where: { $0.id == waiting.id })?.signedCopyRemovedAt == nil)
+
+        let reopened = HistoryStore(baseDirectory: base)
+        #expect(reopened.records.count == 2)
+        #expect(reopened.records.first(where: { $0.id == delivered.id })?.signedCopyRemovedAt != nil)
+        #expect(reopened.signedCopyBytes == 3_000)
+
+        let rest = reopened.clearSignedCopies(deliveredOnly: false)
+        #expect(rest.removed == 1 && rest.failed == 0)
+        #expect(reopened.signedCopyBytes == 0)
+        #expect(reopened.records.count == 2)
+        #expect(reopened.delete(waiting))
+        #expect(reopened.records.count == 1)
+    }
+
+    @Test("Download cleanup waits for the Sign handoff and keeps repository metadata")
+    func repositoryDownloads() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("download-cleanup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let store = RepositoryStore(baseDirectory: base)
+        _ = store.add(urlString: "https://example.com/apps.json")
+        let ipa = base.appendingPathComponent("Downloads/app.ipa")
+        try Data(repeating: 0x41, count: 4_096).write(to: ipa)
+        #expect(store.downloadedBytes == 4_096)
+
+        store.pendingIPA = ipa
+        #expect(store.clearDownloads().removed == 0)
+        #expect(FileManager.default.fileExists(atPath: ipa.path))
+
+        store.pendingIPA = nil
+        let result = store.clearDownloads()
+        #expect(result.removed == 1 && result.failed == 0)
+        #expect(store.downloadedBytes == 0)
+        #expect(store.repositories.count == 1)
+    }
+
+    @Test("Staging cleanup waits for inspection and resets the selected input")
+    func stagedInput() async throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("staging-cleanup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+
+        let source = base.appendingPathComponent("source.ipa")
+        try Data(repeating: 0x41, count: 1_024).write(to: source)
+        let signer = SigningService(workDirectory: base.appendingPathComponent("work"))
+        let staged = try await signer.stage(source)
+        #expect(signer.stagedBytes == 1_024)
+
+        signer.beginInputCheck()
+        #expect(signer.clearStaging().removed == 0)
+        #expect(FileManager.default.fileExists(atPath: staged.path))
+        signer.endInputCheck()
+        #expect(signer.clearStaging().removed == 1)
+        #expect(!FileManager.default.fileExists(atPath: staged.path))
+        #expect(signer.stagedBytes == 0)
+        #expect(signer.stagingResetID == 1)
     }
 }
 
@@ -731,14 +907,35 @@ struct RefreshSourceStoreTests {
         return url
     }
 
+    @Test("Clearing kept originals removes stored and orphaned copies")
+    func removeAllStoredCopies() async throws {
+        let base = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let directory = base.appendingPathComponent("kept", isDirectory: true)
+        let store = RefreshSourceStore(directory: directory)
+        let original = try package(named: "original.ipa", bytes: 2_048, in: base)
+        let id = UUID()
+        #expect(await store.retain(original, for: id) != nil)
+        let orphan = try package(named: "orphan.ipa", bytes: 512, in: directory)
+        #expect(store.storedBytes == 2_560)
+
+        let result = store.removeAll()
+        #expect(result.removed == 2 && result.failed == 0)
+        #expect(store.storedBytes == 0)
+        #expect(store.totalBytes == 0)
+        #expect(store.sourceURL(for: id) == nil)
+        #expect(!FileManager.default.fileExists(atPath: orphan.path))
+        #expect(FileManager.default.fileExists(atPath: original.path))
+    }
+
     @Test("Retaining copies the original and reports it back")
-    func retain() throws {
+    func retain() async throws {
         let directory = try tempDirectory()
         let store = RefreshSourceStore(directory: directory)
         let id = UUID()
         let original = try package(named: "original.ipa", bytes: 2_048, in: directory)
 
-        let kept = store.retain(original, for: id)
+        let kept = await store.retain(original, for: id)
         #expect(kept == "\(id.uuidString).ipa")
         let url = try #require(store.sourceURL(for: id))
         #expect(try Data(contentsOf: url).count == 2_048)
@@ -755,16 +952,16 @@ struct RefreshSourceStoreTests {
     }
 
     @Test("A package larger than the budget is refused, not silently truncated")
-    func refusesOversizedPackage() throws {
+    func refusesOversizedPackage() async throws {
         let directory = try tempDirectory()
         let store = RefreshSourceStore(directory: directory, budget: 1_024)
         let original = try package(named: "big.ipa", bytes: 4_096, in: directory)
-        #expect(store.retain(original, for: UUID()) == nil)
+        #expect(await store.retain(original, for: UUID()) == nil)
         #expect(store.totalBytes == 0)
     }
 
     @Test("Pruning evicts the oldest copies to stay inside the budget")
-    func prune() throws {
+    func prune() async throws {
         let directory = try tempDirectory()
         let store = RefreshSourceStore(directory: directory, budget: 3_000)
         let first = try package(named: "one.ipa", bytes: 2_000, in: directory)
@@ -772,11 +969,167 @@ struct RefreshSourceStoreTests {
 
         let firstID = UUID()
         let secondID = UUID()
-        store.retain(first, for: firstID)
-        store.retain(second, for: secondID, now: Date().addingTimeInterval(60))
+        await store.retain(first, for: firstID)
+        await store.retain(second, for: secondID, now: Date().addingTimeInterval(60))
 
         #expect(store.sourceURL(for: firstID) == nil, "the oldest copy is evicted first")
         #expect(store.sourceURL(for: secondID) != nil)
         #expect(store.totalBytes <= 3_000)
     }
+}
+
+@Suite("Audit regressions")
+@MainActor
+struct AuditRegressionTests {
+    private func temporaryDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("audit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    @Test("Selecting an already staged IPA preserves its bytes")
+    func restagingSameFile() async throws {
+        let base = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let signer = SigningService(workDirectory: base)
+        let input = base.appendingPathComponent("input.ipa")
+        let bytes = Data("original input".utf8)
+        try bytes.write(to: input)
+        #expect(try await signer.stage(input) == input)
+        #expect(try Data(contentsOf: input) == bytes)
+
+        let alias = base.appendingPathComponent("alias.ipa")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: input)
+        #expect(try await signer.stage(alias, as: "input.ipa") == input)
+        #expect(try Data(contentsOf: input) == bytes)
+    }
+
+    @Test("A failed replacement keeps the previous staged IPA")
+    func failedReplacement() async throws {
+        let base = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let signer = SigningService(workDirectory: base.appendingPathComponent("work"))
+        let original = base.appendingPathComponent("original.ipa")
+        try Data("keep me".utf8).write(to: original)
+        let staged = try await signer.stage(original, as: "input.ipa")
+        await #expect(throws: FileCopyOperation.Failure.unreadable) { try await signer.stage(base.appendingPathComponent("missing.ipa"), as: "input.ipa") }
+        #expect(try Data(contentsOf: staged) == Data("keep me".utf8))
+        await #expect(throws: FileCopyOperation.Failure.invalidDestination) { try await signer.stage(original, as: "../escaped.ipa") }
+        #expect(!FileManager.default.fileExists(atPath: base.appendingPathComponent("escaped.ipa").path))
+    }
+
+    @Test("Staging refuses to overwrite inputs owned by an active operation")
+    func stagingDuringOperation() async throws {
+        let base = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let signer = SigningService(workDirectory: base.appendingPathComponent("work"))
+        let input = base.appendingPathComponent("input.ipa")
+        try Data("first".utf8).write(to: input)
+        let staged = try await signer.stage(input)
+        try Data("replacement".utf8).write(to: input)
+        for phase in [SigningService.Phase.signing, .provisioning] {
+            signer.phase = phase
+            #expect(!signer.canAcceptInput)
+            await #expect(throws: FileCopyOperation.Failure.busy) { try await signer.stage(input) }
+            #expect(try Data(contentsOf: staged) == Data("first".utf8))
+        }
+        signer.phase = .idle
+        signer.beginInputCheck()
+        await #expect(throws: FileCopyOperation.Failure.busy) { try await signer.stage(input) }
+        signer.endInputCheck()
+        #expect(try await signer.stage(input) == staged)
+        #expect(try Data(contentsOf: staged) == Data("replacement".utf8))
+    }
+
+    @Test("Incomplete or encrypted preflight blocks signing")
+    func preflightReadiness() {
+        #expect(IPAPreflightState.idle.signingBlocker != nil)
+        #expect(IPAPreflightState.inspecting.signingBlocker != nil)
+        #expect(IPAPreflightState.failed("Invalid archive").signingBlocker == "Invalid archive")
+        for encryptedCount in [0, 1] {
+            let inspection = IPAPreflight(
+                appName: "Demo", bundleIdentifier: "com.example.demo",
+                shortVersion: "1", buildVersion: "1", minimumOSVersion: "16.0",
+                nestedBundleCount: 0, extensionCount: 0, frameworkCount: 0,
+                watchAppCount: 0, totalMachOCount: 1, signedMachOCount: 0,
+                encryptedExecutableCount: encryptedCount, encryptedPaths: [],
+                bundles: [], archiveBytes: 1
+            )
+            #expect((IPAPreflightState.ready(inspection).signingBlocker == nil) == (encryptedCount == 0))
+        }
+    }
+
+    @Test("An install manifest must identify exactly one package and its version")
+    func manifestAmbiguity() throws {
+        let package = "http://127.0.0.1:1234/app.ipa"
+        let asset: [String: Any] = ["kind": "software-package", "url": package]
+        let metadata: [String: Any] = ["bundle-identifier": "com.example.app", "bundle-version": "2"]
+        let valid: [String: Any] = ["assets": [asset], "metadata": metadata]
+        let missingVersion: [String: Any] = ["assets": [asset], "metadata": ["bundle-identifier": "com.example.app"]]
+        let extraPackage: [String: Any] = ["assets": [asset, asset], "metadata": metadata]
+        for items in [[missingVersion], [valid, valid], [extraPackage]] {
+            let data = try PropertyListSerialization.data(fromPropertyList: ["items": items], format: .xml, options: 0)
+            #expect(!NetworkPolicy.manifestIsValid(data, packageURL: package, bundleID: "com.example.app", version: "2"))
+        }
+    }
+
+    @Test("Repository names and versions cannot escape the download directory", arguments: [
+        ("Example", "1.2"), ("../Example", "../../outside"),
+        ("A/B\\C:D", "1/2:3"), (String(repeating: "📦", count: 300), "1")
+    ])
+    func repositoryFilename(name: String, version: String) throws {
+        let data = try JSONSerialization.data(withJSONObject: ["name": name, "version": version])
+        let app = try JSONDecoder().decode(RepoApp.self, from: data)
+        let filename = RepositoryStore.ipaName(for: app)
+        let directory = URL(fileURLWithPath: "/tmp/Downloads", isDirectory: true)
+        let result = directory.appendingPathComponent(filename).standardizedFileURL
+        #expect(result.deletingLastPathComponent() == directory)
+        #expect(filename.utf8.count <= 184)
+        #expect(result.pathExtension == "ipa")
+        #expect(!filename.contains(":"))
+        #expect(!filename.contains("\\"))
+        if name == "Example" { #expect(filename == "Example-1.2.ipa") }
+    }
+
+    @Test("Interrupted installs reopen as retryable signed copies")
+    func interruptedInstall() throws {
+        let base = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let history = HistoryStore(baseDirectory: base)
+        let record = history.append(inputName: "input.ipa", outputName: "signed.ipa",
+                                    bundleId: "com.example.app", version: "1", certificateCN: nil)
+        try Data("signed".utf8).write(to: history.outputURL(for: record))
+        history.setInstallState(.installing, for: record.id)
+        let reopened = HistoryStore(baseDirectory: base)
+        #expect(reopened.records.first?.installState == .signed)
+        #expect(reopened.fileExists(for: record))
+        #expect(HistoryStore(baseDirectory: base).records.first?.installState == .signed)
+    }
+
+    @Test("Cancelling an install restores its Library state before any network work")
+    func cancelledInstall() throws {
+        let base = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let ipa = base.appendingPathComponent("app.ipa")
+        try Data("fixture".utf8).write(to: ipa)
+        let recordID = UUID()
+        let observed = InstallStateCapture()
+        let observer = NotificationCenter.default.addObserver(forName: .forgeInstallState, object: nil, queue: nil) { notification in
+            guard notification.userInfo?["recordID"] as? UUID == recordID,
+                  let state = notification.userInfo?["state"] as? String else { return }
+            MainActor.assumeIsolated { observed.states.append(state) }
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        let coordinator = InstallCoordinator()
+        coordinator.install(ipa: ipa, bundleId: "com.example.app", version: "1", recordID: recordID)
+        coordinator.cancel()
+        #expect(coordinator.phase == .cancelled)
+        #expect(observed.states == ["installing", "signed"])
+    }
+}
+
+@MainActor
+private final class InstallStateCapture {
+    var states: [String] = []
 }

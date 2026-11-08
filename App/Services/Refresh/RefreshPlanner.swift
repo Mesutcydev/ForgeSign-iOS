@@ -60,7 +60,7 @@ enum RefreshPlanner {
         guard inputs.hasInstallTransport else {
             return .unsupported(reason: "No installation transport is available in this build.")
         }
-        if let expiry = inputs.profileExpiresAt, expiry <= now {
+        if let expiry = inputs.profileExpiresAt, expiry.timeIntervalSince(now) <= 0 {
             // Expired apps cannot be upgraded in place with an expired profile.
             return .interactive(reason: "The embedded profile has expired; refresh now to re-provision.")
         }
@@ -136,6 +136,11 @@ final class RefreshSourceStore: ObservableObject {
     private let manifestURL: URL
     private let budget: Int64
     @Published private var entries: [Entry]
+    @Published private(set) var isRetaining = false
+    @Published private(set) var copyProgress: TransferProgress?
+    @Published private(set) var retentionError: String?
+    private var activeCopy: FileCopyOperation?
+    private var activeCopyID: UUID?
 
     private struct Entry: Codable, Equatable {
         var recordID: UUID
@@ -149,6 +154,7 @@ final class RefreshSourceStore: ObservableObject {
         let base = directory ?? FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("RefreshSources", isDirectory: true)
+        FileCopyOperation.removeAbandonedPartials(in: base)
         self.directory = base
         self.manifestURL = base.appendingPathComponent("manifest.json")
         self.budget = budget
@@ -158,6 +164,10 @@ final class RefreshSourceStore: ObservableObject {
     }
 
     var totalBytes: Int64 { entries.reduce(0) { $0 + $1.byteCount } }
+
+    var storedBytes: Int64 {
+        StorageUsage.bytes(of: StorageUsage.files(in: directory, extensions: ["ipa"]))
+    }
 
     func sourceURL(for recordID: UUID) -> URL? {
         guard let entry = entries.first(where: { $0.recordID == recordID }) else { return nil }
@@ -172,16 +182,40 @@ final class RefreshSourceStore: ObservableObject {
     /// Copies the imported package next to the library index. Returns the stored
     /// filename, or nil when the copy is refused (too big / unreadable).
     @discardableResult
-    func retain(_ source: URL, for recordID: UUID, now: Date = Date()) -> String? {
+    func retain(_ source: URL, for recordID: UUID, now: Date = Date()) async -> String? {
+        guard !isRetaining else { return nil }
+        retentionError = nil
         let size = (try? FileManager.default.attributesOfItem(atPath: source.path)[.size] as? Int64) ?? 0
-        guard size > 0, size <= budget else { return nil }
+        guard size > 0, size <= budget else {
+            retentionError = "The signed IPA was saved, but its original could not be kept within the refresh storage budget."
+            return nil
+        }
 
         let filename = "\(recordID.uuidString).ipa"
         let destination = directory.appendingPathComponent(filename)
-        try? FileManager.default.removeItem(at: destination)
+        let id = UUID()
+        let operation = FileCopyOperation { [weak self] progress in
+            Task { @MainActor in
+                guard let self, self.activeCopyID == id else { return }
+                self.copyProgress = progress
+            }
+        }
+        activeCopy = operation
+        activeCopyID = id
+        isRetaining = true
+        copyProgress = nil
+        defer {
+            activeCopy = nil
+            activeCopyID = nil
+            isRetaining = false
+            copyProgress = nil
+        }
         do {
-            try FileManager.default.copyItem(at: source, to: destination)
+            _ = try await operation.copy(from: source, to: destination, maximumBytes: budget)
+        } catch is CancellationError {
+            return nil
         } catch {
+            retentionError = "The signed IPA was saved, but its original could not be kept: \(error.localizedDescription)"
             return nil
         }
 
@@ -196,7 +230,10 @@ final class RefreshSourceStore: ObservableObject {
         return filename
     }
 
+    func cancelRetention() { activeCopy?.cancel() }
+
     func removeSource(for recordID: UUID) {
+        guard !isRetaining else { return }
         if let entry = entries.first(where: { $0.recordID == recordID }) {
             try? FileManager.default.removeItem(at: directory.appendingPathComponent(entry.filename))
         }
@@ -204,10 +241,22 @@ final class RefreshSourceStore: ObservableObject {
         save()
     }
 
-    func removeAll() {
-        entries.forEach { try? FileManager.default.removeItem(at: directory.appendingPathComponent($0.filename)) }
-        entries.removeAll()
+    @discardableResult
+    func removeAll() -> (removed: Int, failed: Int) {
+        guard !isRetaining else { return (0, 0) }
+        var removed = 0
+        var failedNames = Set<String>()
+        for url in StorageUsage.files(in: directory, extensions: ["ipa"]) {
+            do {
+                try FileManager.default.removeItem(at: url)
+                removed += 1
+            } catch {
+                failedNames.insert(url.lastPathComponent)
+            }
+        }
+        entries.removeAll { !failedNames.contains($0.filename) }
         save()
+        return (removed, failedNames.count)
     }
 
     /// Oldest first, until the budget fits. Never keeps more than the budget.

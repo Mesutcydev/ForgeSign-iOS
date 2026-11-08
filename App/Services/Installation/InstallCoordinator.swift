@@ -60,12 +60,12 @@ struct InstallationProgress: Equatable, Sendable {
     }
 }
 
-/// The single owner of installation: drives the OTA `InstallController`
-/// (loopback server + itms-services) and mirrors its progress for the UI.
-/// The controller posts the Library install state itself.
 // ponytail: OTA only. The paired-device (idevice) transport was removed: it was
 // never validated on hardware and double-freed its session on reuse. Restore
 // from git (b4ac4d8) if a direct install path is wanted again.
+/// The single owner of installation: drives the OTA `InstallController`
+/// (loopback server + itms-services) and mirrors its progress for the UI.
+/// The controller posts the Library install state itself.
 @MainActor
 final class InstallCoordinator: ObservableObject {
     @Published private(set) var phase: InstallationPhase = .idle
@@ -115,6 +115,15 @@ final class InstallCoordinator: ObservableObject {
 
     func cancel() {
         controller.cancelInstall(markFailed: false)
+    }
+
+    /// Clears mirrored progress after `controller.abortQuietly()`, so a stale
+    /// phase (e.g. still `.awaitingSystem`) never gates the next signing run.
+    func reset() {
+        phase = .idle
+        statusMessage = ""
+        lastError = nil
+        lastRequest = nil
     }
 
     private func apply(_ progress: InstallationProgress) {

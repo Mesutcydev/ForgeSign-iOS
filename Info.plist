@@ -46,9 +46,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.7</string>
+	<string>2.8</string>
 	<key>CFBundleVersion</key>
-	<string>28</string>
+	<string>31</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>itms-services</string>
@@ -74,6 +74,11 @@
 	<array>
 		<string>audio</string>
 	</array>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UILaunchScreen</key>

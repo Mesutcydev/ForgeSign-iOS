@@ -59,7 +59,12 @@ bool ZSHA::SHAFile(const char* szFile, string& strSHA1, string& strSHA256)
 	strSHA256.clear();
 	size_t sSize = 0;
 	uint8_t* pBase = (uint8_t*)ZFile::MapFile(szFile, 0, 0, &sSize, true);
-	// pBase may be NULL, but it's ok, because the file may be empty
+	// An empty file cannot be mapped. Distinguish it from an unreadable
+	// resource instead of silently sealing that resource with empty hashes.
+	if (NULL == pBase) {
+		string strData;
+		return ZFile::ReadFile(szFile, strData) && ZSHA::SHA(strData, strSHA1, strSHA256);
+	}
 	ZSHA::SHA1(pBase, sSize, strSHA1);
 	ZSHA::SHA256(pBase, sSize, strSHA256);
 	if (NULL != pBase && sSize > 0) {
@@ -81,10 +86,14 @@ bool ZSHA::SHABase64(const string& strData, string& strSHA1Base64, string& strSH
 
 bool ZSHA::SHABase64File(const char* szFile, string& strSHA1Base64, string& strSHA256Base64)
 {
+	strSHA1Base64.clear();
+	strSHA256Base64.clear();
 	jbase64 b64;
 	string strSHA1;
 	string strSHA256;
-	SHAFile(szFile, strSHA1, strSHA256);
+	if (!SHAFile(szFile, strSHA1, strSHA256)) {
+		return false;
+	}
 	strSHA1Base64 = b64.encode(strSHA1);
 	strSHA256Base64 = b64.encode(strSHA256);
 	return (!strSHA1Base64.empty() && !strSHA256Base64.empty());

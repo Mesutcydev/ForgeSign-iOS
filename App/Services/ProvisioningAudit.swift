@@ -42,7 +42,7 @@ struct ProvisioningAudit: Equatable, Sendable {
     /// True when only app extensions (not the app, a watch app or an App
     /// Clip) lack a usable profile, so removing extensions lets the app sign.
     var onlyExtensionsBlocked: Bool {
-        let blocked = rows.filter { $0.kind != .app && $0.state.isBlocking }
+        let blocked = rows.filter { $0.state.isBlocking }
         return !blocked.isEmpty && blocked.allSatisfy { $0.kind == .extension }
     }
 
@@ -172,7 +172,10 @@ enum ProvisioningAuditService {
         guard profile.profileIsAuthentic else {
             return makeRow(.missingProfile, "The matching profile failed authenticity validation.")
         }
-        if let expiry = profile.notAfter, expiry <= now {
+        if let expiry = certificate?.notAfter, expiry.timeIntervalSince(now) <= 0 {
+            return makeRow(.expired, "The selected signing certificate has expired.")
+        }
+        if let expiry = profile.notAfter, expiry.timeIntervalSince(now) <= 0 {
             return makeRow(.expired, "Profile “\(profile.displayName)” is expired.")
         }
         if let certificateTeam = certificate?.teamID,
@@ -203,8 +206,12 @@ enum ProvisioningAuditService {
                            "The matching profile does not grant the App Groups required by this bundle.")
         }
 
-        let coverageUnknown = deviceIdentifier == nil &&
-            profile.provisionsAllDevices != true && !profile.provisionedDevices.isEmpty
+        // With a known device but no device list on the profile (a plist
+        // omission, not an all-devices profile), membership cannot be
+        // confirmed — do not read the omission as "every device covered".
+        // Without a device identifier the original .ready behavior stands.
+        let coverageUnknown = profile.provisionsAllDevices != true &&
+            deviceIdentifier != nil && profile.provisionedDevices.isEmpty
         let entitlementUnknown = !bundle.entitlementsAvailable
         if coverageUnknown || entitlementUnknown {
             var warnings: [String] = []
