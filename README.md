@@ -141,6 +141,14 @@ installed as an upgrade so app data survives.
   claimed: a sideloaded app cannot rely on `BGTaskScheduler`, and ForgeSign does
   not pretend otherwise.
 
+## What’s new in 2.8.3
+
+- **Custom bundle IDs sign again.** Since 2.8, setting a new bundle ID that no imported profile covers stopped signing with "No imported provisioning profile matches this bundle ID." The selected profile now signs the main app again, as it did up to 2.7, and the App row shows **selected profile** as a warning. Certificate, team, expiry, device and App Group checks still apply. Extensions still need their own matching profile. iOS can refuse to install an app whose bundle ID its profile doesn't cover, so use a wildcard profile or Apple Account provisioning for a matching one. With Apple Account provisioning ready, ForgeSign asks Apple for a matching profile instead.
+
+2.8.2 was never published as a release; its changes below ship in 2.8.3.
+
+[Full release notes](WHATS_NEW.md) · [Download the latest IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)
+
 ## What’s new in 2.8.2
 
 - **Apple Account sign-in with community anisette servers.** Since mid-October 2026 Apple's GrandSlam rejects sign-ins whose client identity doesn't match the anisette server that generated the data (-80045, or an HTML 503). ForgeSign now signs in with the User-Agent and client info the server reports in `/v3/client_info`, and requests SMS codes through Apple's current JSON endpoints (the plist form now fails with HTTP 415). Ported from AltSign's `notarized` branch onto the pinned revision.

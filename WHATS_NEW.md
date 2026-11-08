@@ -1,8 +1,12 @@
-# ForgeSign 2.8.2
+# ForgeSign 2.8.3
 
-A follow-up to 2.8.1 that restores Apple Account sign-in with community anisette servers and lands fixes from a full code audit. Everything in the 2.8 and 2.8.1 notes still applies.
+A follow-up to 2.8.1 that lets you sign with a custom bundle ID again, restores Apple Account sign-in with community anisette servers, and lands fixes from a full code audit. 2.8.2 was never published as a release, so its changes ship here too. Everything in the 2.8 and 2.8.1 notes still applies.
 
-## What's new
+## What's new in 2.8.3
+
+- **Custom bundle IDs sign again.** Since 2.8, setting a new bundle ID that no imported profile covers stopped signing with "No imported provisioning profile matches this bundle ID." The selected profile now signs the main app again, as it did up to 2.7, and the App row shows **selected profile** as a warning. Certificate, team, expiry, device and App Group checks still apply. Extensions still need their own matching profile. iOS can refuse to install an app whose bundle ID its profile doesn't cover, so use a wildcard profile or Apple Account provisioning for a matching one. With Apple Account provisioning ready, ForgeSign asks Apple for a matching profile instead.
+
+## Also included from 2.8.2
 
 - **Apple Account sign-in with community anisette servers.** Since mid-October 2026 Apple's GrandSlam rejects sign-ins whose client identity doesn't match the anisette server that generated the data (-80045, or an HTML 503). ForgeSign now signs in with the User-Agent and client info the server reports in `/v3/client_info`, and requests SMS codes through Apple's current JSON endpoints (the plist form now fails with HTTP 415). Ported from AltSign's `notarized` branch onto the pinned revision.
 - **Refresh installs as an upgrade.** A Library refresh re-signs the kept original with the installed app's bundle ID and original file name, so it replaces the installed app instead of adding a second one.
@@ -13,9 +17,9 @@ A follow-up to 2.8.1 that restores Apple Account sign-in with community anisette
 
 ## Validation
 
-CI on this build: dependency bootstrap from checksum-pinned sources (including the updated AltSign patch over the pinned revision), native signing invariants, simulator tests, the device Release build, and IPA packaging/validation.
+CI on this build: dependency bootstrap from checksum-pinned sources (including the updated AltSign patch over the pinned revision), native signing invariants, simulator tests (including the custom bundle ID fallback), the device Release build, and IPA packaging/validation.
 
-Apple Account sign-in and 2FA (trusted device and SMS), refresh-as-upgrade, and OTA installation on a registered device remain to be verified on hardware.
+Apple Account sign-in and 2FA (trusted device and SMS), refresh-as-upgrade, signing and installing a custom bundle ID with the selected profile, and OTA installation on a registered device remain to be verified on hardware.
 
 ## Download
 
@@ -23,4 +27,4 @@ The IPA is **unsigned**. Sign it with your own certificate and matching provisio
 
 [Download the latest IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)
 
-`ForgeSign-2.8.2.ipa` and `ForgeSign-latest.ipa` contain the same build: **2.8.2 (33)**. SHA-256 checksums are attached to this release.
+`ForgeSign-2.8.3.ipa` and `ForgeSign-latest.ipa` contain the same build: **2.8.3 (34)**. SHA-256 checksums are attached to this release.
