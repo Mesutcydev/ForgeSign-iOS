@@ -2,7 +2,7 @@
 
 On-device IPA re-signer for iPhone and iPad. Sign and prepare IPAs on-device; installation uses a loopback server and a trusted remote HTTPS manifest, with no certificate or app-content upload.
 
-**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 2.6](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.6/ForgeSign-2.6.ipa)**
+**[Explore the ForgeSign site](https://mesutcydev.github.io/ForgeSign-iOS/)** · **[Download ForgeSign 2.7](https://github.com/Mesutcydev/ForgeSign-iOS/releases/download/v2.7/ForgeSign-2.7.ipa)**
 
 ForgeSign wraps the battle-tested [zsign](https://github.com/zhlynn/zsign) C++ engine (with a static OpenSSL) in a SwiftUI "liquid glass" interface and adds a complete signing workflow on top of it.
 
@@ -61,7 +61,7 @@ This excludes Finder metadata and AppleDouble resource forks (`._*`, including m
 
 ## Sideload the prebuilt IPA
 
-Grab `ForgeSign-2.6.ipa` from [ForgeSign 2.6](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.6). The IPA ships **unsigned** — sign it with your own certificate and provisioning profile before installing.
+Grab `ForgeSign-2.7.ipa` from [ForgeSign 2.7](https://github.com/Mesutcydev/ForgeSign-iOS/releases/tag/v2.7). The IPA ships **unsigned** — sign it with your own certificate and provisioning profile before installing.
 
 1. Download the IPA.
 2. Sign it with your certificate + provisioning profile — e.g. with ForgeSign (desktop or the iOS app itself), Sideloadly, AltStore or a similar tool.
@@ -148,6 +148,16 @@ paired transports:
   in this build marked *unavailable* rather than a false green tick, plus
   **Copy Diagnostics** that is redacted (no pairing payloads, private keys,
   certificates, or full UDIDs).
+
+## What’s new in 2.7
+
+- **Apple Account sign-in works again with community anisette servers.** Since mid-October 2026 Apple rejects sign-ins whose client identity doesn't match the anisette server (-80045 or HTTP 503). ForgeSign now signs in with the identity the server reports, and requests SMS codes through Apple's current endpoints.
+- **Steadier installs:** cancelling is no longer recorded as a failure, re-signing no longer blocks the next install for 30 minutes, a download in progress keeps running when you switch back to ForgeSign, and the paired-device transport no longer crashes on its second install or on cancel.
+- **Safer signing runs:** inputs are locked while signing, and an IPA that arrives meanwhile (Files, Sources, Library refresh) waits instead of deleting the package being signed. A bundle ID filled in by Apple Account provisioning no longer carries over to the next IPA.
+- **Refresh installs as an upgrade:** a Library refresh re-signs the kept original with the installed app's bundle ID and name.
+- **Signing fixes:** apps whose name contains "Payload" (e.g. `PayloadKit.app`) package correctly, and an unreadable file now fails signing instead of being sealed as empty (upstream zsign #413).
+- **Library and pairing:** deleting an entry also removes its kept original, kept originals can be deleted after turning the option off, `idevice pair` records no longer vanish after import, and AltStore remote-pairing records are no longer reported as belonging to another device.
+- **Usability and accessibility:** the chosen certificate is remembered, deleting certificates, profiles and pairing records asks first, files opened from other apps land on the Sign tab, custom toggles work with VoiceOver, controls are labelled, and faint text is easier to read.
 
 ## What’s new in 2.6
 
