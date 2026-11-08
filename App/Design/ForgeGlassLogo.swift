@@ -17,6 +17,7 @@ struct ForgeGlassLogoView: View {
                 RoundedRectangle(cornerRadius: size * 0.30, style: .continuous)
                     .stroke(T.rule, lineWidth: AppStroke.hairline)
             }
-            .accessibilityLabel("ForgeSign")
+            // Decorative: every screen shows its title right next to it.
+            .accessibilityHidden(true)
     }
 }

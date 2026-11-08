@@ -15,7 +15,6 @@ final class DirectDeviceInstallationBackend: IPAInstallationBackend {
     private let pairingProvider: @MainActor () -> [DevicePairingRecord]
     private let tunnelProvider: @MainActor () -> DeviceTunnelEndpoint?
     private let expectedUDIDProvider: @MainActor () -> String?
-    private var cancelled = false
 
     init(transport: DeviceTransporting = DeviceTransportFactory.make(),
          isEnabled: Bool = FeatureFlags.directDeviceInstall,
@@ -50,13 +49,10 @@ final class DirectDeviceInstallationBackend: IPAInstallationBackend {
         guard status.deviceIdentifierMatches != false else {
             return .unavailable(reason: "The stored pairing record belongs to another device.")
         }
-        // A remote-pairing record connects to the device's own listener
-        // (discovered via Bonjour, shared through the locator); only a
-        // lockdown record needs the LocalDevVPN tunnel.
-        let endpoint = tunnelProvider()
-        let needsVPNTunnel = records.first?.kind == .lockdown
-        if needsVPNTunnel, endpoint == nil { return .requiresVPN }
-        if endpoint == nil { return .requiresVPN }
+        // Both record kinds need a reachable endpoint: a lockdown record uses
+        // the LocalDevVPN tunnel, a remote-pairing record the device's own
+        // listener (discovered via Bonjour and shared through the locator).
+        guard tunnelProvider() != nil else { return .requiresVPN }
         return .available
     }
 
@@ -64,7 +60,6 @@ final class DirectDeviceInstallationBackend: IPAInstallationBackend {
 
     func install(_ app: SignedAppMetadata,
                  progress: @escaping (InstallationProgress) -> Void) async throws -> InstallationReceipt {
-        cancelled = false
         progress(InstallationProgress(phase: .checkingEnvironment, message: "Checking the paired device…"))
 
         if case .unavailable(let reason) = availability(for: app) {
@@ -152,7 +147,6 @@ final class DirectDeviceInstallationBackend: IPAInstallationBackend {
     }
 
     func cancel() {
-        cancelled = true
         Task { await transport.closeSession() }
     }
 
@@ -169,7 +163,7 @@ final class DirectDeviceInstallationBackend: IPAInstallationBackend {
         switch transportError {
         case .notAvailable(let detail): return .backendUnavailable(detail)
         case .connectionFailed: return .connectionLost
-        case .pairingRejected(let detail): return .pairingInvalid
+        case .pairingRejected: return .pairingInvalid
         case .serviceUnavailable: return .deviceUnavailable
         case .stagingFailed, .transferFailed: return .transferFailed
         case .installFailed(let detail): return .installRejected(detail)

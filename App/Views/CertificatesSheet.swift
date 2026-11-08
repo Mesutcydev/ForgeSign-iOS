@@ -12,6 +12,7 @@ struct CertificatesSheet: View {
     @State private var pendingPassword = ""
     @State private var rememberPassword = true
     @State private var error: String?
+    @State private var pendingDelete: CertificateRecord?
 
     var body: some View {
         NavigationStack {
@@ -22,6 +23,15 @@ struct CertificatesSheet: View {
 
                         if let pendingURL = store.pendingImportURL {
                             verifyCard(pendingURL)
+                        } else if let error {
+                            // Errors raised before a file is accepted (wrong
+                            // type) have no verify card to appear in.
+                            Text(error)
+                                .font(T.mono(10))
+                                .foregroundColor(T.bad)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, T.pad)
+                                .padding(.top, 16)
                         }
 
                         if store.certificates.isEmpty && store.pendingImportURL == nil {
@@ -51,6 +61,15 @@ struct CertificatesSheet: View {
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
+                .confirmationDialog("Delete this certificate?",
+                                    isPresented: Binding(get: { pendingDelete != nil },
+                                                         set: { if !$0 { pendingDelete = nil } }),
+                                    titleVisibility: .visible,
+                                    presenting: pendingDelete) { cert in
+                    Button("Delete \(cert.displayName)", role: .destructive) { store.delete(cert) }
+                } message: { _ in
+                    Text("The .p12 file and its saved Keychain password are removed from this device.")
+                }
                 .fullScreenCover(isPresented: $showImporter) {
                     ForgeDocumentPicker {
                         guard ["p12", "pfx"].contains($0.pathExtension.lowercased()) else {
@@ -83,6 +102,7 @@ struct CertificatesSheet: View {
                     .fClearGlass(in: Circle(), interactive: true)
             }
             .buttonStyle(GlassTactileButtonStyle())
+            .accessibilityLabel("Close")
         }
         .padding(.horizontal, T.pad)
         .padding(.top, 24)
@@ -115,7 +135,7 @@ struct CertificatesSheet: View {
         let expiry = P12Inspector.expiry(cert.notAfter)
 
         return Button {
-            store.selectedID = cert.id
+            store.select(cert.id)
         } label: {
             HStack(spacing: 12) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -153,7 +173,7 @@ struct CertificatesSheet: View {
         }
         .buttonStyle(GlassTactileButtonStyle())
         .contextMenu {
-            Button("Delete", role: .destructive) { store.delete(cert) }
+            Button("Delete…", role: .destructive) { pendingDelete = cert }
         }
     }
 
@@ -193,6 +213,11 @@ struct CertificatesSheet: View {
                 Spacer(minLength: 8)
                 GlassToggle(isOn: $rememberPassword)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Remember password in Keychain")
+            .accessibilityValue(rememberPassword ? "On" : "Off")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { rememberPassword.toggle() }
 
             if let error {
                 Text(error)

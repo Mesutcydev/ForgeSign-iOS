@@ -213,6 +213,7 @@ struct RepoDetailSheet: View {
                     .fClearGlass(in: Circle(), interactive: true)
             }
             .buttonStyle(GlassTactileButtonStyle())
+            .accessibilityLabel("Close")
         }
         .padding(.horizontal, T.pad)
         .padding(.top, 24)
@@ -304,7 +305,7 @@ struct RepoDetailSheet: View {
                             .font(T.mono(10)).foregroundColor(T.ink3)
                     }
                     if let dev = app.developerName {
-                        Text(dev).font(T.mono(10)).foregroundColor(T.ink4)
+                        Text(dev).font(T.mono(10)).foregroundColor(T.ink3)
                             .lineLimit(1).truncationMode(.tail)
                     }
                     if app.versions.count > 1 {
@@ -315,7 +316,7 @@ struct RepoDetailSheet: View {
                     if let description = app.localizedDescription, !description.isEmpty {
                         Text(description)
                             .font(T.mono(9))
-                            .foregroundColor(T.ink4)
+                            .foregroundColor(T.ink3)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
@@ -334,6 +335,7 @@ struct RepoDetailSheet: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(GlassTactileButtonStyle())
+            .accessibilityLabel("Details for \(app.name)")
 
             getButton(app)
         }
@@ -377,6 +379,7 @@ struct RepoDetailSheet: View {
             }
             .buttonStyle(GlassTactileButtonStyle())
             .disabled(app.downloadURL == nil || store.activeDownloadID != nil)
+            .accessibilityLabel("Download \(app.name)")
         }
     }
 }
@@ -477,6 +480,7 @@ struct RepoAppDetailSheet: View {
                     .fClearGlass(in: Circle(), interactive: true)
             }
             .buttonStyle(GlassTactileButtonStyle())
+            .accessibilityLabel("Close")
         }
         .padding(.horizontal, T.pad)
         .padding(.top, 24)

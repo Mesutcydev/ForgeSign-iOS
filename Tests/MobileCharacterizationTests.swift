@@ -741,6 +741,13 @@ struct MobileCharacterizationTests {
         #expect(parsed.kind == .remotePairing)
         #expect(parsed.udid == "rppairing-93029d27-d2db-355a-84cb-b88bc77d6008")
         #expect(parsed.displayName == "Paired over remote pairing")
+
+        // Its identifier is not a UDID, so it can never "belong to another
+        // device" when compared with the AltStore-injected ALTDeviceID.
+        let status = DevicePairingValidator.status(records: [parsed],
+                                                   expectedUDID: String(repeating: "a", count: 40))
+        #expect(status.deviceIdentifierMatches == nil)
+        #expect(status.isUsable)
     }
 
     @Test("Host-side idevice pair records parse with the UDID from the filename")

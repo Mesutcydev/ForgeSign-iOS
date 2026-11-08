@@ -30,11 +30,17 @@ def validate_ipa(ipa, allow_metadata=False):
         if len(roots) != 1 or not next(iter(roots)).endswith(".app"):
             raise ValueError("Payload must contain exactly one app")
         root = "Payload/" + next(iter(roots)) + "/"
-        info = plistlib.loads(archive.read(root + "Info.plist"))
+        try:
+            info = plistlib.loads(archive.read(root + "Info.plist"))
+        except KeyError:
+            raise ValueError("App is missing Info.plist") from None
         executable = info.get("CFBundleExecutable", "")
         if not executable or "/" in executable or "\\" in executable or executable in (".", ".."):
             raise ValueError("Invalid CFBundleExecutable")
-        entry = archive.getinfo(root + executable)
+        try:
+            entry = archive.getinfo(root + executable)
+        except KeyError:
+            raise ValueError(f"App executable is missing: {executable}") from None
         if not stat.S_ISREG(entry.external_attr >> 16) or not (entry.external_attr >> 16) & 0o111:
             raise ValueError("App executable must be a regular, executable file")
         if info.get("CFBundlePackageType") != "APPL" or not info.get("CFBundleIdentifier"):
@@ -45,27 +51,53 @@ def validate_ipa(ipa, allow_metadata=False):
         return retained
 
 
+def _create_ipa(output, write, verify=None):
+    """Write a new IPA, validate it, and remove it again if any step fails.
+
+    The output is opened in exclusive-create mode, so an existing file is never
+    touched; a half-written or invalid IPA is never left behind to block the
+    next run.
+    """
+    output = Path(output)
+    archive = zipfile.ZipFile(output, "x", zipfile.ZIP_DEFLATED)
+    try:
+        with archive:
+            write(archive)
+        validate_ipa(output)
+        if verify:
+            verify(output)
+    except BaseException:
+        output.unlink(missing_ok=True)
+        raise
+
+
 def repack_ipa(source, output):
     retained = validate_ipa(source, allow_metadata=True)
-    with zipfile.ZipFile(source) as original, zipfile.ZipFile(output, "x", zipfile.ZIP_DEFLATED) as clean:
-        for name in retained:
-            entry = copy.copy(original.getinfo(name))
-            entry.extra = b""
-            clean.writestr(entry, original.read(name), compress_type=zipfile.ZIP_DEFLATED)
-    validate_ipa(output)
-    # Repackaging must not alter any app resource, executable or signature.
-    with zipfile.ZipFile(source) as original, zipfile.ZipFile(output) as clean:
-        for name in retained:
-            if original.read(name) != clean.read(name):
-                raise ValueError(f"Repackaging changed app content: {name}")
+
+    def write(clean):
+        with zipfile.ZipFile(source) as original:
+            for name in retained:
+                entry = copy.copy(original.getinfo(name))
+                entry.extra = b""
+                clean.writestr(entry, original.read(name), compress_type=zipfile.ZIP_DEFLATED)
+
+    def verify(output):
+        # Repackaging must not alter any app resource, executable or signature.
+        with zipfile.ZipFile(source) as original, zipfile.ZipFile(output) as clean:
+            for name in retained:
+                if original.read(name) != clean.read(name):
+                    raise ValueError(f"Repackaging changed app content: {name}")
+
+    _create_ipa(output, write, verify)
 
 
 def package_app(source, output):
     source = Path(source)
     if not source.is_dir() or source.suffix != ".app" or source.is_symlink():
         raise ValueError("Source must be an app directory")
-    # ZipFile does not copy filesystem extended attributes or resource forks.
-    with zipfile.ZipFile(output, "x", zipfile.ZIP_DEFLATED) as archive:
+
+    def write(archive):
+        # ZipFile does not copy filesystem extended attributes or resource forks.
         for item in sorted(source.rglob("*")):
             relative = item.relative_to(source)
             if is_metadata(relative.as_posix()):
@@ -74,7 +106,8 @@ def package_app(source, output):
                 raise ValueError(f"Unexpected symlink in device app: {relative}")
             if item.is_file():
                 archive.write(item, (PurePosixPath("Payload") / source.name / relative).as_posix())
-    validate_ipa(output)
+
+    _create_ipa(output, write)
 
 
 def main():

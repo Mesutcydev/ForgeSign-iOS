@@ -117,11 +117,6 @@ extension View {
     func fGlass(cornerRadius: CGFloat = 18) -> some View {
         glassSurface(.card, cornerRadius: cornerRadius)
     }
-
-    /// Capsule variant of `fGlass`.
-    func fGlassCapsule() -> some View {
-        modifier(ShapeGlassSurfaceModifier(shape: Capsule(), role: .capsule))
-    }
 }
 
 private struct ShapeGlassSurfaceModifier<S: InsettableShape>: ViewModifier {
@@ -143,27 +138,6 @@ private struct ShapeGlassSurfaceModifier<S: InsettableShape>: ViewModifier {
             }
         } else {
             content.background(.ultraThinMaterial, in: shape)
-        }
-    }
-}
-
-// MARK: - Glass Container Morphing
-
-/// Morphing container for glass elements on iOS 26+.
-struct FGlassContainer<Content: View>: View {
-    let spacing: CGFloat
-    @ViewBuilder let content: () -> Content
-
-    init(spacing: CGFloat = 0, @ViewBuilder content: @escaping () -> Content) {
-        self.spacing = spacing
-        self.content = content
-    }
-
-    var body: some View {
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: spacing) { content() }
-        } else {
-            content()
         }
     }
 }

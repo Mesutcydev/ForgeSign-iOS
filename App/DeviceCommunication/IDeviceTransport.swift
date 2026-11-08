@@ -15,11 +15,22 @@ import IDevice
 /// released in `closeSession()`. The provider consumes the pairing file handle,
 /// so that handle is never freed here.
 ///
+/// Lifetime: every blocking FFI call runs under `sessionLock`, and so does
+/// `closeSessionSync()`. A cancel therefore waits for the call in flight
+/// instead of freeing a handle that call is still using. Between AFC chunks
+/// the upload checks `closeRequested` so a cancel does not wait for the whole
+/// transfer.
+///
 /// The C API's handle types are opaque structs, so Swift sees them as
 /// `OpaquePointer`. Every FFI call is blocking, so it runs in a detached task —
 /// the main actor is never blocked by a transfer or an installation.
 final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
     private let lock = NSLock()
+    /// Serializes session setup, teardown and every call that uses a handle.
+    /// Recursive because `openSessionSync` tears down the previous session.
+    private let sessionLock = NSRecursiveLock()
+    /// Set by `closeSession()` before it waits for `sessionLock`; guarded by `lock`.
+    private var closeRequested = false
     private var provider: OpaquePointer?
     private var adapter: OpaquePointer?
     private var handshake: OpaquePointer?
@@ -55,13 +66,21 @@ final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
     }
 
     func closeSession() async {
+        lock.lock()
+        closeRequested = true
+        lock.unlock()
         await Task.detached(priority: .utility) { [self] in
             closeSessionSync()
         }.value
     }
 
     private func openSessionSync(pairing: DevicePairingRecord, tunnel: DeviceTunnelEndpoint) throws {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
         closeSessionSync()
+        lock.lock()
+        closeRequested = false
+        lock.unlock()
 
         if pairing.kind == .remotePairing {
             // AltStore 2.x / SideStore `ALTPairingFile`: connect via the RSD
@@ -127,7 +146,13 @@ final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
                 lock.unlock()
                 persist?(pairing, updated)
             }
-            try connectServices()
+            do {
+                try connectServices()
+            } catch {
+                // Release the tunnel adapter and handshake opened above.
+                closeSessionSync()
+                throw error
+            }
             return
         }
 
@@ -215,13 +240,21 @@ final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
     }
 
     private func closeSessionSync() {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
         lock.lock()
         let installer = self.installer
         let afc = self.afc
         let provider = self.provider
+        let handshake = self.handshake
+        let adapter = self.adapter
+        // Clear every handle before freeing it so a second close (or the
+        // next open) can never free the same RSD adapter/handshake twice.
         self.installer = nil
         self.afc = nil
         self.provider = nil
+        self.handshake = nil
+        self.adapter = nil
         lock.unlock()
 
         if let installer { installation_proxy_client_free(installer) }
@@ -240,6 +273,8 @@ final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
     }
 
     private func installedAppSync(bundleIdentifier: String) throws -> InstalledAppRecord? {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
         guard let installer else {
             throw DeviceTransportError.serviceUnavailable("No device session is open.")
         }
@@ -276,6 +311,8 @@ final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
     }
 
     private func stageSync(package: URL, onProgress: @escaping @Sendable (Double) -> Void) throws -> String {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
         guard let afc else {
             throw DeviceTransportError.serviceUnavailable("No device session is open.")
         }
@@ -307,6 +344,9 @@ final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
 
         do {
             while true {
+                if isCloseRequested {
+                    throw DeviceTransportError.transferFailed("The transfer was cancelled.")
+                }
                 let chunk = try input.read(upToCount: Self.chunkSize) ?? Data()
                 if chunk.isEmpty { break }
                 let writeError = chunk.withUnsafeBytes { buffer -> UnsafeMutablePointer<IdeviceFfiError>? in
@@ -332,9 +372,8 @@ final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
     }
 
     private func removeStagedPackageSync(atPath: String) {
-        lock.lock()
-        let afc = self.afc
-        lock.unlock()
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
         guard let afc else { return }
         _ = Self.consume(afc_remove_path(afc, atPath))
     }
@@ -353,6 +392,8 @@ final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
     private func installSync(atPath: String,
                              upgrade: Bool,
                              onProgress: @escaping @Sendable (Double) -> Void) throws {
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
         guard let installer else {
             throw DeviceTransportError.serviceUnavailable("No device session is open.")
         }
@@ -375,6 +416,12 @@ final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
                 ? DeviceTransportError.upgradeFailed(mapped.userFacingReason)
                 : DeviceTransportError.installFailed(mapped.userFacingReason)
         }
+    }
+
+    private var isCloseRequested: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return closeRequested
     }
 
     // MARK: - FFI plumbing

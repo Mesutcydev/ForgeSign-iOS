@@ -138,7 +138,9 @@ struct GlassSection<Content: View>: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 CaptionText(text: title)
+                    .accessibilityAddTraits(.isHeader)
                 Rectangle().fill(T.rule).frame(height: 1)
+                    .accessibilityHidden(true)
             }
             .padding(.bottom, 10)
 
@@ -252,6 +254,8 @@ struct GlassInputRow: View {
             .foregroundColor(T.ink)
             .multilineTextAlignment(.trailing)
             .frame(maxWidth: 170)
+            // Without this VoiceOver reads only the placeholder ("Optional").
+            .accessibilityLabel(label)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
@@ -274,10 +278,13 @@ struct GlassToggleRow: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue(isOn ? "On" : "Off")
-        .accessibilityHint("Double-tap to toggle.")
+        .accessibilityAddTraits(.isButton)
+        // The visual toggle is hidden from VoiceOver, so the row itself must
+        // carry the action or double-tapping it does nothing.
+        .accessibilityAction { isOn.toggle() }
     }
 }
 
@@ -330,27 +337,6 @@ struct GlassStatusPill: View {
             }
             .overlay {
                 Capsule().stroke(color.opacity(T.isDark ? 0.40 : 0.28), lineWidth: AppStroke.hairline)
-            }
-    }
-}
-
-/// Bordered mono tag (e.g. a bundle id or version chip).
-struct GlassTag: View {
-    let text: String
-    var size: CGFloat = 10
-
-    @Environment(\.forgeTheme) private var T
-
-    var body: some View {
-        Text(text)
-            .font(T.mono(size))
-            .foregroundColor(T.ink2)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
-            .glassSurface(.badge)
-            .overlay {
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(T.rule, lineWidth: AppStroke.hairline)
             }
     }
 }

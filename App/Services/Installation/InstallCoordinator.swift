@@ -94,9 +94,26 @@ final class InstallCoordinator: ObservableObject {
 
     func cancel() {
         guard activeToken != nil else { return }
-        backends.forEach { $0.cancel() }
+        // Drop the token first: the cancelled run's late progress and errors
+        // are then ignored instead of being reported as a failure.
         activeToken = nil
+        backends.forEach { $0.cancel() }
         apply(InstallationProgress(phase: .cancelled, message: "Install cancelled."))
+        if let recordID = lastRequest?.recordID {
+            // Leave the Library row as a signed app, not "installing" or "failed".
+            post(.signed, recordID: recordID)
+        }
+    }
+
+    /// Clears the previous install's status so a new signing run starts clean.
+    /// Does nothing while an install is running.
+    func reset() {
+        guard activeToken == nil else { return }
+        phase = .idle
+        statusMessage = ""
+        lastError = nil
+        lastReceipt = nil
+        fallbackMethods = []
     }
 
     private func install(_ request: Request) {
@@ -133,16 +150,26 @@ final class InstallCoordinator: ObservableObject {
                     return
                 }
                 self.fallbackMethods = InstallationBackendSelection.fallbacks(after: method, candidates: candidates)
+                // Every result below is ignored once this run was cancelled or
+                // superseded, so it can never overwrite a newer install's state.
                 do {
                     let receipt = try await backend.install(request.metadata) { [weak self] progress in
-                        self?.apply(progress)
+                        guard let self, self.activeToken == token else { return }
+                        self.apply(progress)
                     }
+                    guard self.activeToken == token else { return }
                     self.finish(receipt, request: request)
                 } catch is CancellationError {
+                    guard self.activeToken == token else { return }
+                    self.apply(InstallationProgress(phase: .cancelled, message: "Install cancelled."))
+                } catch DeviceInstallError.cancelled {
+                    guard self.activeToken == token else { return }
                     self.apply(InstallationProgress(phase: .cancelled, message: "Install cancelled."))
                 } catch let error as DeviceInstallError {
+                    guard self.activeToken == token else { return }
                     self.fail(error, request: request)
                 } catch {
+                    guard self.activeToken == token else { return }
                     self.fail(.installRejected(error.localizedDescription), request: request)
                 }
             }

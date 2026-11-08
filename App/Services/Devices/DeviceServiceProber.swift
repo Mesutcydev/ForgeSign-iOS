@@ -4,11 +4,12 @@ import Network
 // MARK: - Device service probe
 //
 // The Device service / Installer service health rows must reflect reality, not
-// build flags. This probe does what a real install would do, minus the
-// transfer: discover the device's remote-pairing listener over Bonjour
-// (`_remotepairing._tcp`), connect, and exercise AFC + InstallationProxy via
-// the vendored idevice FFI. When the FFI is absent (simulator builds) the probe
-// reports honestly that it could not run.
+// build flags. This probe discovers the device's remote-pairing listener over
+// Bonjour (`_remotepairing._tcp`) and opens a TCP connection to it. AFC and
+// InstallationProxy themselves are only exercised by a real install session,
+// so a passing probe means "listener reachable", and its detail says so.
+// When the FFI is absent (simulator builds) the probe reports honestly that it
+// could not run.
 //
 // No pairing payloads, keys or UDIDs leave this file beyond masked forms.
 
@@ -54,12 +55,17 @@ final class DeviceServiceProber {
     private(set) var deviceListenerEndpoint: DeviceTunnelEndpoint?
 
     private var browser: NWBrowser?
+    private var connection: NWConnection?
+    /// Bumped per probe so a previous probe's timeout cannot end this one early.
+    private var probeGeneration = 0
     private var pendingContinuations: [CheckedContinuation<DeviceServiceProbeResult, Never>] = []
 
     /// Discovers `_remotepairing._tcp` on the current network and probes the
     /// first resolvable device. Timeout-bounded: a silent network fails fast.
     func probeDeviceServices(pairing: DevicePairingRecord,
                              timeout: TimeInterval = 8) async -> DeviceServiceProbeResult {
+        probeGeneration += 1
+        let generation = probeGeneration
         let result = await withCheckedContinuation { continuation in
             Task { @MainActor in
                 pendingContinuations.append(continuation)
@@ -67,7 +73,8 @@ final class DeviceServiceProber {
             }
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                self?.finish(.failed(detail: "No device answered on the local network within \(Int(timeout))s."))
+                guard let self, self.probeGeneration == generation else { return }
+                self.finish(.failed(detail: "No device answered on the local network within \(Int(timeout))s."))
             }
         }
         lastResult = result
@@ -108,11 +115,16 @@ final class DeviceServiceProber {
     private func stopBrowsing() {
         browser?.cancel()
         browser = nil
+        // Covers the timeout and failure paths, which used to leave it open.
+        connection?.cancel()
+        connection = nil
     }
 
     private func connect(to endpoint: NWEndpoint) {
         #if canImport(IDevice)
         let connection = NWConnection(to: endpoint, using: .tcp)
+        self.connection?.cancel()
+        self.connection = connection
         connection.stateUpdateHandler = { [weak self] state in
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -129,12 +141,13 @@ final class DeviceServiceProber {
                         // Share it with the install backends through the locator.
                         DeviceTunnelLocator.shared.update(self.deviceListenerEndpoint)
                         connection.cancel()
-                        self.finish(.ok(detail: "Device services answered at \(endpoint.host):\(endpoint.port)."))
+                        self.finish(.ok(detail: "Device listener reachable at \(endpoint.host):\(endpoint.port); services are exercised during install."))
                     } else {
                         connection.cancel()
-                        self.finish(.ok(detail: "Device services answered on the local network."))
+                        self.finish(.ok(detail: "Device listener reachable on the local network; services are exercised during install."))
                     }
                 case .failed(let error):
+                    connection.cancel()
                     self.finish(.failed(detail: "Could not reach the device: \(error.localizedDescription)"))
                 default:
                     break

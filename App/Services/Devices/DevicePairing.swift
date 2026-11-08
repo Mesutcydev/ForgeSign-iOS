@@ -196,7 +196,11 @@ enum DevicePairingValidator {
         guard let record = records.first else { return .empty }
         let expected = expectedUDID?.trimmingCharacters(in: .whitespacesAndNewlines)
         let matches: Bool?
-        if let expected, !expected.isEmpty {
+        if record.kind == .remotePairing {
+            // RSD remote-pairing records are keyed by their own identifier,
+            // not the device UDID, so they cannot be compared with ALTDeviceID.
+            matches = nil
+        } else if let expected, !expected.isEmpty {
             matches = record.udid.caseInsensitiveCompare(expected) == .orderedSame
         } else {
             matches = nil
@@ -237,8 +241,15 @@ final class KeychainDevicePairingStore: DevicePairingStoring, @unchecked Sendabl
               let items = result as? [[String: Any]] else { return [] }
 
         return items.compactMap { item in
-            guard let data = item[kSecValueData as String] as? Data,
-                  case .success(let record) = DevicePairingRecord.parse(data: data) else { return nil }
+            guard let data = item[kSecValueData as String] as? Data else { return nil }
+            // Host-side (`idevice pair`) records carry the UDID only in their
+            // import filename, which was stored as the account; the Keychain
+            // creation date is the real import time used for ordering.
+            let account = item[kSecAttrAccount as String] as? String
+            let created = item[kSecAttrCreationDate as String] as? Date ?? .distantPast
+            guard case .success(let record) = DevicePairingRecord.parse(data: data,
+                                                                       filenameHint: account,
+                                                                       addedAt: created) else { return nil }
             return record
         }
         .sorted { $0.addedAt > $1.addedAt }
@@ -499,7 +510,6 @@ enum DeviceInstallHealthService {
         rows.append(serviceRow(id: "device-service", title: "Device service"))
         rows.append(serviceRow(id: "installer-service", title: "Installer service"))
 
-        let remoteAvailable = availableMethods.contains(.remoteAltServer)
         rows.append(DeviceInstallHealthRow(id: "remote", title: "Remote AltServer",
                                            status: .unavailable,
                                            detail: "Not implemented. AltStore's remote mode is device pairing + a local tunnel, not a server API — use Device Installation above.",

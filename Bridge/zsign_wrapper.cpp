@@ -366,14 +366,16 @@ static int FS_SignIPA(const char* ipaPath,
         snprintf(versionBuf, versionBufLen, "%s", signedVersion.c_str());
     }
 
-    // Repackage to IPA.
-    size_t pos = bundle.m_strAppFolder.rfind("Payload");
+    // Repackage to IPA. Match the whole "/Payload/" component: a bare
+    // "Payload" search also hits app names such as "PayloadKit.app" and would
+    // archive the wrong folder, leaving the IPA without its Payload root.
+    size_t pos = bundle.m_strAppFolder.rfind("/Payload/");
     if (string::npos == pos || 0 == pos) {
         ZFile::RemoveFolder(strFolder.c_str());
         setMsg("Could not locate Payload directory after signing.");
         return 13;
     }
-    string strBaseFolder = bundle.m_strAppFolder.substr(0, pos - 1);
+    string strBaseFolder = bundle.m_strAppFolder.substr(0, pos);
     if (!Zip::Archive(strBaseFolder.c_str(), strOutput.c_str(), 0)) {
         ZFile::RemoveFolder(strFolder.c_str());
         setMsg("Failed to package the signed IPA.");
@@ -611,11 +613,12 @@ extern "C" int forgesign_inject_dylib_ipa(const char* ipaPath,
         }
     }
 
-    size_t payloadPos = appFolder.rfind("Payload");
+    // Match the whole "/Payload/" component (see FS_SignIPA).
+    size_t payloadPos = appFolder.rfind("/Payload/");
     if (string::npos == payloadPos || 0 == payloadPos) {
         return fail(16, "Could not locate the Payload directory after injection.");
     }
-    string baseFolder = appFolder.substr(0, payloadPos - 1);
+    string baseFolder = appFolder.substr(0, payloadPos);
     ZFile::RemoveFile(strOutput.c_str());
     if (!Zip::Archive(baseFolder.c_str(), strOutput.c_str(), 0)) {
         return fail(17, "Failed to package the IPA after dylib injection.");

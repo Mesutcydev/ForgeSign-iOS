@@ -47,6 +47,22 @@ struct ContentView: View {
     @AppStorage("retainRefreshSources") private var retainRefreshSources = false
     @State private var altServerApplePassword = ""
     @State private var signNotice: String?
+    /// Bundle ID that Apple Account provisioning filled in, so the next IPA
+    /// does not inherit it and install over the previous app.
+    @State private var autoBundleID: String?
+    /// An IPA that arrived (Files, Sources, Library refresh) while a run was in
+    /// progress; staged once the run ends so it cannot delete the input in use.
+    @State private var deferredIPA: DeferredIPA?
+
+    private struct DeferredIPA {
+        let url: URL
+        let fallbackToSource: Bool
+    }
+
+    /// Signing or provisioning is running; inputs are locked until it ends.
+    private var isBusy: Bool {
+        signer.phase == .signing || signer.phase == .provisioning
+    }
 
     private var anisetteMode: AnisetteMode {
         AnisettePreference.resolvedMode(storedMode: anisetteModeRaw,
@@ -75,6 +91,7 @@ struct ContentView: View {
                         header
 
                         inputSection
+                            .disabled(isBusy)
                         if ipaURL != nil {
                             IPAPreflightCard(state: preflightState,
                                              certificate: certStore.selected,
@@ -83,6 +100,7 @@ struct ContentView: View {
                                              manualSigningAvailable: canSignManually)
                         }
                         optionsSection
+                            .disabled(isBusy)
                         AutomaticProvisioningSection(
                             isEnabled: $automaticProvisioningEnabled,
                             appleID: $altServerAppleID,
@@ -94,6 +112,7 @@ struct ContentView: View {
                             altServer: altServer,
                             provisioner: altProvisioner
                         )
+                        .disabled(isBusy)
                         DylibInjectionSection(dylibURL: $dylibURL,
                                               injectIntoExtensions: $injectIntoExtensions,
                                               chooseDylib: { showDylibImporter = true },
@@ -101,6 +120,7 @@ struct ContentView: View {
                                                   dylibURL = nil
                                                   injectIntoExtensions = false
                                               })
+                        .disabled(isBusy)
                         DeviceInstallationSection(
                             model: deviceInstall,
                             availableMethods: installCoordinator.availableMethods,
@@ -167,6 +187,7 @@ struct ContentView: View {
                 .alert("Two-Factor Authentication", isPresented: $altProvisioner.isRequestingVerificationCode) {
                     TextField("Six-digit code", text: $altProvisioner.verificationCode)
                         .keyboardType(.numberPad)
+                        .textContentType(.oneTimeCode)
                     Button("Cancel", role: .cancel) { altProvisioner.cancelVerification() }
                     Button("Continue") { altProvisioner.submitVerificationCode() }
                 } message: {
@@ -212,6 +233,11 @@ struct ContentView: View {
                 .onChange(of: remoteAnisetteServerAddress) { _ in refreshProvisioningAudit() }
                 .onChange(of: signer.phase) { _ in
                     if case .signing = signer.phase { signNotice = nil }
+                    if !isBusy, let deferred = deferredIPA {
+                        deferredIPA = nil
+                        signNotice = nil
+                        stageIPA(deferred.url, fallbackToSource: deferred.fallbackToSource)
+                    }
                 }
             }
         }
@@ -357,7 +383,7 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 if busy {
                     ProgressView()
-                        .tint(.white)
+                        .tint(T.isDark ? .white : T.ink)
                     Text(provisioning ? "Provisioning…" : "Signing…")
                         .font(T.sans(15, .semibold))
                 } else {
@@ -509,7 +535,8 @@ struct ContentView: View {
                             installCoordinator.cancel()
                         }
                     }
-                    if let fallback = installCoordinator.fallbackMethods.first {
+                    if installCoordinator.lastError != nil, !installCoordinator.isInstalling,
+                       let fallback = installCoordinator.fallbackMethods.first {
                         GlassSecondaryButton(label: "Use \(fallback.displayName) Instead",
                                              systemImage: "arrow.triangle.branch") {
                             installCoordinator.retryWithFallback()
@@ -537,6 +564,17 @@ struct ContentView: View {
     // MARK: - Logic
 
     private func stageIPA(_ source: URL, fallbackToSource: Bool = false) {
+        // Staging prunes the other archives in the work folder, which would
+        // delete the package a running sign or provisioning pass still reads.
+        guard !isBusy else {
+            deferredIPA = DeferredIPA(url: source, fallbackToSource: fallbackToSource)
+            signNotice = "A new IPA arrived while signing. It will load when this run finishes."
+            return
+        }
+        if let autoBundleID {
+            if bundleId == autoBundleID { bundleId = "" }
+            self.autoBundleID = nil
+        }
         let localURL = signer.stage(source) ?? (fallbackToSource ? source : nil)
         guard let localURL else {
             ipaURL = nil
@@ -605,8 +643,13 @@ struct ContentView: View {
                 }
                 return "Add a certificate and profile, or enter your Apple Account details plus an anisette source."
             }
-            if case .ready = preflightState { return nil }
-            return "Inspecting the IPA…"
+            switch preflightState {
+            case .ready: return nil
+            case .failed:
+                return "The IPA could not be inspected — import a certificate and profile to sign manually."
+            default:
+                return "Inspecting the IPA…"
+            }
         }
 
         if !canSignManually { return "Add a certificate (.p12 with its password) and a provisioning profile." }
@@ -760,14 +803,18 @@ struct ContentView: View {
         if allowAutomaticProvisioning { provisioningWarning = nil }
         signedIPA = nil
         lastRecordID = nil
+        // End any install still waiting on the previous IPA through the
+        // coordinator, so its operation and token do not block the next one.
+        installCoordinator.cancel()
+        installCoordinator.reset()
         install.installStatus = ""
-        install.installServer?.stop()
-        install.installServer = nil
-        InstallKeepAlive.shared.stop()
         let output = history.uniqueOutputURL(for: ipa.lastPathComponent)
         let outName = output.lastPathComponent
-        let partialOutput = signer.tempDir.appendingPathComponent("signed-\(UUID().uuidString).ipa.partial")
-        let tempDir = signer.tempDir
+        // A private scratch folder per run: a preflight of the next IPA can use
+        // the shared temp folder without being wiped when this run ends.
+        let tempDir = signer.tempDir.appendingPathComponent("run-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let partialOutput = tempDir.appendingPathComponent("signed.ipa.partial")
         let bid = bundleId.trimmingCharacters(in: .whitespaces)
         let rmExt = removeExtensions
         let enDocs = enableDocuments
@@ -775,6 +822,7 @@ struct ContentView: View {
         let injectExt = injectIntoExtensions
 
         Task.detached(priority: .userInitiated) {
+            defer { try? FileManager.default.removeItem(at: tempDir) }
             for (index, profileURL) in profileURLs.enumerated() {
                 let validation = SigningService.validateSigningAsset(
                     p12: p12, password: pw, profile: profileURL
@@ -820,7 +868,6 @@ struct ContentView: View {
                 ? SigningService.verify(ipa: partialOutput, temporaryDirectory: tempDir)
                 : (ok: false, message: result.message)
             await MainActor.run {
-                defer { signer.cleanTemp() }
                 guard result.ok, verification.ok else {
                     try? FileManager.default.removeItem(at: partialOutput)
                     signer.phase = .failed(result.ok ? verification.message : result.message)
@@ -913,7 +960,8 @@ struct ContentView: View {
                     }
                 }
                 bundleId = response.rootBundleIdentifier
-                certStore.selectedID = importedCertificate.id
+                autoBundleID = response.rootBundleIdentifier
+                certStore.select(importedCertificate.id)
                 if let rootProfile = profileStore.profiles.first(where: {
                     importedProfileIDs.contains($0.id)
                         && $0.applicationIdentifier?.hasSuffix(".\(response.rootBundleIdentifier)") == true

@@ -59,12 +59,12 @@ struct LibraryView: View {
                     Button("Refresh — re-sign \(refreshSources.sourceName(for: record.id) ?? "the kept original")") {
                         onRefresh(record)
                     }
-                    Button("Drop kept original") { refreshSources.removeSource(for: record.id) }
+                    Button("Drop kept original", role: .destructive) { refreshSources.removeSource(for: record.id) }
                 }
                 if history.fileExists(for: record) {
-                    Button("Delete signed IPA", role: .destructive) { history.delete(record) }
+                    Button("Delete signed IPA", role: .destructive) { delete(record) }
                 } else {
-                    Button("Remove from Library", role: .destructive) { history.delete(record) }
+                    Button("Remove from Library", role: .destructive) { delete(record) }
                 }
             }
             .sheet(item: $shareRecord) { record in
@@ -97,9 +97,19 @@ struct LibraryView: View {
             .tint(T.accent)
             .padding(.horizontal, 24)
 
-            if retainRefreshSources, refreshSources.totalBytes > 0 {
+            if refreshSources.totalBytes > 0 {
                 MonoText(text: "KEPT \(ByteCountFormatter.string(fromByteCount: refreshSources.totalBytes, countStyle: .file))",
-                         size: 9, color: T.ink4)
+                         size: 9, color: T.ink3)
+                if !retainRefreshSources {
+                    // Turning the option off stops keeping new originals; the
+                    // ones already kept stay until they are deleted here.
+                    Button(role: .destructive) {
+                        refreshSources.removeAll()
+                    } label: {
+                        MonoText(text: "DELETE KEPT ORIGINALS", size: 9, weight: .semibold, color: T.bad)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
         .padding(.top, 32)
@@ -160,7 +170,7 @@ struct LibraryView: View {
                     if let certificateCN = record.certificateCN, !certificateCN.isEmpty {
                         Text(certificateCN)
                             .font(T.mono(9))
-                            .foregroundColor(T.ink4)
+                            .foregroundColor(T.ink3)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
@@ -178,7 +188,7 @@ struct LibraryView: View {
                     refreshPill(record)
                     Text(record.date.formatted(date: .abbreviated, time: .shortened))
                         .font(T.mono(9, .medium))
-                        .foregroundColor(T.ink4)
+                        .foregroundColor(T.ink3)
                 }
             }
             .padding(.horizontal, 16)
@@ -217,6 +227,13 @@ struct LibraryView: View {
         } else if refreshSources.sourceURL(for: record.id) != nil {
             GlassStatusPill(text: "refresh ready", color: T.accent2)
         }
+    }
+
+    /// Deleting an entry also drops its kept original, which would otherwise
+    /// stay on disk and count against the refresh budget with no way to remove it.
+    private func delete(_ record: SigningRecord) {
+        refreshSources.removeSource(for: record.id)
+        history.delete(record)
     }
 
     private func expiryColor(_ record: SigningRecord) -> Color {

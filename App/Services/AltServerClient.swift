@@ -136,12 +136,23 @@ final class AltServerClient: ObservableObject {
         let parameters = NWParameters.tcp
         parameters.includePeerToPeer = true
         let browser = NWBrowser(for: .bonjour(type: "_altserver._tcp", domain: nil), using: parameters)
+        let browserID = ObjectIdentifier(browser)
         browser.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
                 guard let self else { return }
                 switch state {
                 case .ready:
                     self.isSearching = true
+                    // Bonjour browsing never "finishes". After a short window,
+                    // stop reporting "Searching…" so the UI can say what was
+                    // (not) found; discovery keeps running, so a server that
+                    // appears later still shows up in the list.
+                    Task { @MainActor [weak self] in
+                        try? await Task.sleep(nanoseconds: 10 * 1_000_000_000)
+                        guard let self, let current = self.browser,
+                              ObjectIdentifier(current) == browserID else { return }
+                        self.isSearching = false
+                    }
                 case .failed(let error):
                     self.discoveryError = error.localizedDescription
                     self.isSearching = false

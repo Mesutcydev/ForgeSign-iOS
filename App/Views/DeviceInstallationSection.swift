@@ -16,6 +16,7 @@ struct DeviceInstallationSection: View {
     @Environment(\.forgeTheme) private var T
     @State private var showImporter = false
     @State private var didCopy = false
+    @State private var confirmRemoval = false
 
     var body: some View {
         GlassSection("Device Installation") {
@@ -44,7 +45,16 @@ struct DeviceInstallationSection: View {
                 model.refresh(availableMethods: availableMethods, expectedUDID: expectedUDID)
             }
         }
-        .task {
+        .confirmationDialog(model.records.count > 1 ? "Remove all pairing records?" : "Remove the pairing record?",
+                            isPresented: $confirmRemoval,
+                            titleVisibility: .visible) {
+            Button("Remove", role: .destructive) { model.removeAll() }
+        } message: {
+            Text("Pairing records cannot be recovered here; you would need to export them again from AltStore, SideStore or idevice_pair.")
+        }
+        // Re-check whenever the UDID changes (typed for provisioning or
+        // injected by AltStore) so the pairing pill never goes stale.
+        .task(id: expectedUDID) {
             model.refresh(availableMethods: availableMethods, expectedUDID: expectedUDID)
         }
     }
@@ -64,10 +74,10 @@ struct DeviceInstallationSection: View {
                         }
                         if model.hasRecord {
                             Button(role: .destructive) {
-                                model.removeAll()
-                                model.refresh(availableMethods: availableMethods, expectedUDID: expectedUDID)
+                                confirmRemoval = true
                             } label: {
-                                Label("Remove Pairing Record", systemImage: "trash")
+                                Label(model.records.count > 1 ? "Remove All Pairing Records…" : "Remove Pairing Record…",
+                                      systemImage: "trash")
                             }
                         }
                     } label: {
@@ -176,7 +186,7 @@ struct DeviceInstallationSection: View {
             }
             Text("Pairing records are stored in this device's Keychain only (no iCloud, no backups) and are never included in diagnostics. Pairing files (`.mobiledevicepairing` / `.plist`) sent from Files or other apps land here automatically.")
                 .font(T.mono(9))
-                .foregroundColor(T.ink4)
+                .foregroundColor(T.ink3)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -355,7 +355,7 @@ enum RemoteAnisetteClient {
         var request = URLRequest(url: url)
         request.timeoutInterval = requestTimeout
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        let (data, response) = try await send(request, serverName: serverName)
+        let (data, _) = try await send(request, serverName: serverName)
 
         guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw RemoteAnisetteError.invalidResponse("client_info is not JSON.")

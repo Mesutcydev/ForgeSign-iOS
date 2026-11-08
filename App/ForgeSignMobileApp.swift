@@ -21,7 +21,6 @@ struct ForgeSignMobileApp: App {
                 .environmentObject(repositories)
                 .environmentObject(imports)
                 .environmentObject(refreshSources)
-                .onOpenURL { imports.receive($0) }
         }
     }
 }
@@ -81,6 +80,12 @@ private struct ForgeRootView: View {
         .onChange(of: repositories.pendingIPA) { ipa in
             // A repo download finished — surface it in the Sign tab.
             if ipa != nil { tab = 0 }
+        }
+        .onOpenURL { url in
+            // Files / share-sheet imports land on the Sign tab, where the IPA
+            // (or the pairing card) shows what was received.
+            imports.receive(url)
+            tab = 0
         }
     }
 }

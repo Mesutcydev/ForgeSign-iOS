@@ -53,8 +53,8 @@ final class OTAInstallationBackend: IPAInstallationBackend {
             }
             switch event.phase {
             case .delivered:
-                // The handoff succeeded; the controller keeps serving the IPA
-                // while iOS finishes, exactly as before.
+                // iOS downloaded the whole IPA. The controller has already
+                // stopped its server; iOS finishes the install out of process.
                 return InstallationReceipt(method: method,
                                            bundleIdentifier: app.bundleIdentifier,
                                            outcome: .deliveredToSystem,

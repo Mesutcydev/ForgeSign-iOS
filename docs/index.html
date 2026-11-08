@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#edf2f8">
+  <meta name="theme-color" content="#edf2f8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#15181e" media="(prefers-color-scheme: dark)">
   <meta name="description" content="ForgeSign is a calm, local-first IPA signing workflow for iPhone and iPad.">
   <title>ForgeSign — Sign IPAs on-device</title>
   <link rel="icon" href="./assets/forgesign-icon.png" type="image/png">
@@ -17,10 +18,11 @@
       --surface-muted: rgba(232, 238, 246, .66);
       --ink: #17202c;
       --muted: #677487;
-      --faint: #8b98a8;
+      --faint: #65717f;
       --line: rgba(41, 54, 72, .14);
       --line-strong: rgba(41, 54, 72, .22);
       --accent: #4b535e;
+      --on-accent: #ffffff;
       --accent-soft: #d9e1eb;
       --blue: #91b2d7;
       --lavender: #b9afd8;
@@ -45,6 +47,7 @@
         --line: rgba(225, 233, 242, .14);
         --line-strong: rgba(225, 233, 242, .24);
         --accent: #d7dde5;
+        --on-accent: #15181e;
         --accent-soft: #343b47;
         --blue: #617e9f;
         --lavender: #716a92;
@@ -172,7 +175,7 @@
     .hero-actions { display: flex; flex-wrap: wrap; gap: 11px; margin-top: 30px; }
     .button { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 47px; padding: 12px 17px; border-radius: 15px; border: 1px solid var(--line-strong); font-size: .91rem; font-weight: 700; transition: transform .2s ease, box-shadow .2s ease, background .2s ease; }
     .button:hover, .button:focus-visible { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(46, 58, 75, .14); }
-    .button-primary { color: #fff; background: var(--accent); border-color: var(--accent); }
+    .button-primary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
     .button-secondary { background: var(--surface-strong); }
     .availability { display: flex; flex-wrap: wrap; gap: 17px; margin-top: 27px; color: var(--faint); font-size: .82rem; }
     .availability span { display: inline-flex; align-items: center; gap: 7px; }
@@ -231,6 +234,10 @@
     .gallery-caption span { color: var(--muted); font-size: .81rem; }
 
     .release-panel { display: grid; grid-template-columns: 1fr .9fr; gap: 34px; align-items: center; padding: clamp(28px, 5vw, 58px); border-radius: 34px; background: linear-gradient(135deg, rgba(255,255,255,.72), rgba(221, 229, 239, .52)); }
+    /* The light gradient above outranks .glass, so dark mode needs its own. */
+    @media (prefers-color-scheme: dark) {
+      .release-panel { background: linear-gradient(135deg, rgba(47, 53, 64, .82), rgba(31, 36, 45, .66)); }
+    }
     .release-panel h2 { max-width: 550px; margin-bottom: 15px; font-size: clamp(2rem, 4vw, 3.65rem); line-height: 1; letter-spacing: -.06em; }
     .release-panel p { max-width: 530px; margin-bottom: 0; color: var(--muted); }
     .release-list { display: grid; gap: 11px; }

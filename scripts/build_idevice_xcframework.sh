@@ -51,7 +51,11 @@ if [ ! -d "$WORK_DIR/.git" ]; then
   mkdir -p "$(dirname "$WORK_DIR")"
   git clone --depth 1 --branch "$IDEVICE_REV" "$IDEVICE_REPO" "$WORK_DIR"
 else
-  log "reusing $WORK_DIR"
+  # Reusing a work folder must still build the pinned revision, not whatever
+  # was checked out last time.
+  log "reusing $WORK_DIR; checking out $IDEVICE_REV"
+  git -C "$WORK_DIR" fetch --depth 1 origin "$IDEVICE_REV"
+  git -C "$WORK_DIR" checkout --detach FETCH_HEAD
 fi
 
 cd "$WORK_DIR"
@@ -61,7 +65,7 @@ build_target() {
   local target="$1" sdk="$2"
   log "building $target (sdk: $sdk)"
   BINDGEN_EXTRA_CLANG_ARGS="--sysroot=$(xcrun --sdk "$sdk" --show-sdk-path)" \
-  IPHONEOS_DEPLOYMENT_TARGET=17.0 \
+  IPHONEOS_DEPLOYMENT_TARGET=16.0 \
     cargo build --release --target "$target" --no-default-features --features "$IDEVICE_FEATURES" \
     --manifest-path "$WORK_DIR/ffi/Cargo.toml"
 }

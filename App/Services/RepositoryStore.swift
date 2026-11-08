@@ -282,6 +282,9 @@ final class RepositoryStore: ObservableObject {
             let session = NetworkPolicy.makeValidatedSession()
             defer { session.invalidateAndCancel() }
             let (tempURL, resp) = try await session.download(from: url)
+            // The async download API does not delete its file; without this
+            // every rejected download leaves up to 2 GB in tmp.
+            defer { try? FileManager.default.removeItem(at: tempURL) }
             guard let http = resp as? HTTPURLResponse,
                   (200...299).contains(http.statusCode),
                   let finalURL = resp.url,
@@ -340,8 +343,10 @@ final class RepositoryStore: ObservableObject {
     /// A safe on-disk filename like `AppName-1.2.3.ipa`.
     private static func ipaName(for app: RepoApp) -> String {
         let base = app.name.isEmpty ? app.id.uuidString : app.name
-        let stem = base.components(separatedBy: CharacterSet(charactersIn: "/\\:")).joined(separator: "-")
-        let version = app.version.map { "-\($0)" } ?? ""
+        let unsafe = CharacterSet(charactersIn: "/\\:")
+        let stem = base.components(separatedBy: unsafe).joined(separator: "-")
+        // Feed versions are untrusted too ("1.0/beta" would break the move).
+        let version = app.version.map { "-" + $0.components(separatedBy: unsafe).joined(separator: "-") } ?? ""
         return "\(stem)\(version).ipa"
     }
 
