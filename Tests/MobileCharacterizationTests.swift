@@ -643,6 +643,22 @@ struct MobileCharacterizationTests {
         #expect(InstallationPhase.transferring(0.74).label.contains("74"))
     }
 
+    private func rootOnlyInspection() -> IPAPreflight {
+        IPAPreflight(
+            appName: "Demo", bundleIdentifier: "com.original.demo",
+            shortVersion: "1.0", buildVersion: "1", minimumOSVersion: "16.0",
+            nestedBundleCount: 0, extensionCount: 0, frameworkCount: 0,
+            watchAppCount: 0, totalMachOCount: 1, signedMachOCount: 1,
+            encryptedExecutableCount: 0, encryptedPaths: [],
+            bundles: [SignableBundleInspection(path: "/", kind: .app,
+                                               bundleIdentifier: "com.original.demo",
+                                               entitlementsAvailable: true,
+                                               requiredAppGroups: [],
+                                               requiredKeychainAccessGroups: [])],
+            archiveBytes: 1_024
+        )
+    }
+
     private func inspectionWithExtension() -> IPAPreflight {
         IPAPreflight(
             appName: "Demo", bundleIdentifier: "com.original.demo",
@@ -664,6 +680,105 @@ struct MobileCharacterizationTests {
             ],
             archiveBytes: 1_024
         )
+    }
+
+    @Test("A custom bundle ID no profile covers signs the app with the selected profile")
+    func customBundleIDFallsBackToSelectedProfile() {
+        let selected = profile(name: "Selected", appID: "TEAM.com.original.demo")
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: rootOnlyInspection(), profiles: [selected],
+            preferredProfileID: selected.id, certificate: certificate(),
+            requestedBundleID: "com.forgetest.apple",
+            removeExtensions: false, deviceIdentifier: "DEVICE"
+        )
+        #expect(audit.isReady)
+        #expect(audit.usesSelectedProfileFallback)
+        #expect(audit.rows.first?.state == .selectedProfileFallback)
+        #expect(audit.rows.first?.resolvedBundleID == "com.forgetest.apple")
+        #expect(audit.rows.first?.detail.contains("TEAM.com.original.demo") == true)
+        // The native signer treats the first supplied profile as the root fallback.
+        #expect(audit.selectedProfileIDs == [selected.id])
+    }
+
+    @Test("A profile that matches the custom bundle ID wins over the fallback")
+    func customBundleIDPrefersMatchingProfile() {
+        let selected = profile(name: "Selected", appID: "TEAM.com.original.demo")
+        let matching = profile(name: "Matching", appID: "TEAM.com.forgetest.*")
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: rootOnlyInspection(), profiles: [selected, matching],
+            preferredProfileID: selected.id, certificate: certificate(),
+            requestedBundleID: "com.forgetest.apple",
+            removeExtensions: false, deviceIdentifier: "DEVICE"
+        )
+        #expect(audit.isReady)
+        #expect(!audit.usesSelectedProfileFallback)
+        #expect(audit.selectedProfileIDs == [matching.id])
+    }
+
+    @Test("The selected-profile fallback still enforces team, expiry and device checks")
+    func customBundleIDFallbackKeepsProfileChecks() {
+        let selected = profile(name: "Selected", appID: "TEAM.com.original.demo")
+        func audit(certificate: CertificateRecord, device: String) -> ProvisioningAudit {
+            ProvisioningAuditService.makeAudit(
+                inspection: rootOnlyInspection(), profiles: [selected],
+                preferredProfileID: selected.id, certificate: certificate,
+                requestedBundleID: "com.forgetest.apple",
+                removeExtensions: false, deviceIdentifier: device
+            )
+        }
+        let expired = audit(certificate: certificate(notAfter: .distantPast), device: "DEVICE")
+        #expect(!expired.isReady)
+        #expect(expired.rows.first?.state == .missingProfile)
+        #expect(expired.rows.first?.detail.contains("can't be used instead") == true)
+        #expect(expired.selectedProfileIDs.isEmpty)
+
+        let wrongTeam = CertificateRecord(id: UUID(), filename: "other.p12", commonName: "Other",
+                                          organization: "Other", teamID: "OTHER",
+                                          notAfter: .distantFuture, certificateSHA256: "certificate",
+                                          addedAt: .now, hasSavedPassword: false)
+        #expect(!audit(certificate: wrongTeam, device: "DEVICE").isReady)
+        #expect(!audit(certificate: certificate(), device: "ANOTHER-DEVICE").isReady)
+    }
+
+    @Test("Without a custom bundle ID an unrelated selected profile still blocks the app")
+    func unchangedBundleIDKeepsRootBlocker() {
+        let selected = profile(name: "Selected", appID: "TEAM.com.unrelated.app")
+        for requested in ["", "com.original.demo"] {
+            let audit = ProvisioningAuditService.makeAudit(
+                inspection: rootOnlyInspection(), profiles: [selected],
+                preferredProfileID: selected.id, certificate: certificate(),
+                requestedBundleID: requested,
+                removeExtensions: false, deviceIdentifier: "DEVICE"
+            )
+            #expect(!audit.isReady)
+            #expect(audit.rows.first?.state == .missingProfile)
+            #expect(!audit.usesSelectedProfileFallback)
+        }
+    }
+
+    @Test("The fallback covers only the main app; extensions still need their own profile")
+    func customBundleIDFallbackSkipsExtensions() {
+        let selected = profile(name: "Selected", appID: "TEAM.com.original.demo",
+                               groups: ["group.original.shared"])
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: inspectionWithExtension(), profiles: [selected],
+            preferredProfileID: selected.id, certificate: certificate(),
+            requestedBundleID: "com.forgetest.apple",
+            removeExtensions: false, deviceIdentifier: "DEVICE"
+        )
+        #expect(!audit.isReady)
+        #expect(audit.rows.first?.state == .selectedProfileFallback)
+        #expect(audit.rows.last?.state == .missingProfile)
+        #expect(audit.onlyExtensionsBlocked)
+
+        let withoutExtensions = ProvisioningAuditService.makeAudit(
+            inspection: inspectionWithExtension(), profiles: [selected],
+            preferredProfileID: selected.id, certificate: certificate(),
+            requestedBundleID: "com.forgetest.apple",
+            removeExtensions: true, deviceIdentifier: "DEVICE"
+        )
+        #expect(withoutExtensions.isReady)
+        #expect(withoutExtensions.selectedProfileIDs == [selected.id])
     }
 
     @Test("Removing extensions cannot repair a blocked root app")

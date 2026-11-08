@@ -698,8 +698,11 @@ struct ContentView: View {
             provisioningAudit = audit
             // Apple is only contacted when the imported certificate and
             // profiles cannot cover this IPA; a working manual setup never
-            // waits on (or fails with) Apple's sign-in service.
-            if isAppleAccountReady && (!canSignManually || !audit.isReady) {
+            // waits on (or fails with) Apple's sign-in service. A custom
+            // bundle ID that only the selected-profile fallback covers gets
+            // a matching profile from Apple instead.
+            if isAppleAccountReady &&
+                (!canSignManually || !audit.isReady || audit.usesSelectedProfileFallback) {
                 obtainMissingProfiles(inspection: inspection,
                                       audit: audit,
                                       certificate: certStore.selected)
