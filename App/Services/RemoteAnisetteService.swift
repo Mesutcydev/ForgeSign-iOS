@@ -270,6 +270,10 @@ struct RemoteAnisetteResult: Sendable {
     let json: [String: String]
     let serverName: String
     let usedProvisioning: Bool
+    /// The User-Agent of the client that generated this anisette data (v3
+    /// `/v3/client_info`). Apple's GrandSlam rejects sign-ins whose User-Agent
+    /// does not match it, so AltSign must send this one. Nil for legacy servers.
+    var userAgent: String? = nil
 }
 
 /// Talks to a remote anisette server (v3 protocol with legacy fallback).
@@ -294,8 +298,9 @@ enum RemoteAnisetteClient {
 
         var version3Error: Error?
         do {
-            let json = try await fetchAnisetteVersion3(from: base, serverName: server.name)
-            return RemoteAnisetteResult(json: json, serverName: server.name, usedProvisioning: true)
+            let v3 = try await fetchAnisetteVersion3(from: base, serverName: server.name)
+            return RemoteAnisetteResult(json: v3.json, serverName: server.name, usedProvisioning: true,
+                                        userAgent: v3.userAgent)
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -317,7 +322,8 @@ enum RemoteAnisetteClient {
 
     // MARK: v3
 
-    private static func fetchAnisetteVersion3(from base: URL, serverName: String) async throws -> [String: String] {
+    private static func fetchAnisetteVersion3(from base: URL,
+                                              serverName: String) async throws -> (json: [String: String], userAgent: String) {
         let client = try await fetchClientInformation(from: base, serverName: serverName)
         let identity = AnisetteIdentityStore.loadOrCreateIdentity()
 
@@ -333,7 +339,9 @@ enum RemoteAnisetteClient {
         }
 
         do {
-            return try await headers(from: base, identity: identity, provisioningBlob: blob, serverName: serverName)
+            let json = try await headers(from: base, identity: identity, provisioningBlob: blob,
+                                         serverName: serverName, fallbackClientInfo: client.clientInfo)
+            return (json, client.userAgent)
         } catch let error as RemoteAnisetteError {
             // A stale blob after a server reset is recoverable: re-provision once.
             guard case .invalidResponse = error else { throw error }
@@ -341,7 +349,9 @@ enum RemoteAnisetteClient {
             let fresh = try await provision(against: base, clientInfo: client.clientInfo,
                                             userAgent: client.userAgent, identity: identity)
             AnisetteIdentityStore.storeProvisioningBlob(fresh)
-            return try await headers(from: base, identity: identity, provisioningBlob: fresh, serverName: serverName)
+            let json = try await headers(from: base, identity: identity, provisioningBlob: fresh,
+                                         serverName: serverName, fallbackClientInfo: client.clientInfo)
+            return (json, client.userAgent)
         }
     }
 
@@ -368,10 +378,14 @@ enum RemoteAnisetteClient {
         return ClientInformation(clientInfo: clientInfo, userAgent: userAgent)
     }
 
+    /// `fallbackClientInfo` is the server's `/v3/client_info` identity. v3
+    /// `get_headers` replies usually omit X-MMe-Client-Info, and it must match
+    /// the identity the data was generated for or GrandSlam rejects the sign-in.
     static func headers(from base: URL,
                         identity: AnisetteDeviceIdentity,
                         provisioningBlob: Data,
-                        serverName: String) async throws -> [String: String] {
+                        serverName: String,
+                        fallbackClientInfo: String? = nil) async throws -> [String: String] {
         var request = URLRequest(url: base.appendingPathComponent("v3").appendingPathComponent("get_headers"))
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -395,7 +409,7 @@ enum RemoteAnisetteClient {
               let routingInfo = string(in: object, keys: ["X-Apple-I-MD-RINFO", "routingInfo"]) else {
             throw RemoteAnisetteError.invalidResponse("get_headers is missing the Apple headers.")
         }
-        let clientInfo = string(in: object, keys: ["X-MMe-Client-Info", "deviceDescription"])
+        let clientInfo = string(in: object, keys: ["X-MMe-Client-Info", "deviceDescription"]) ?? fallbackClientInfo
         guard let json = anisetteJSON(identity: identity,
                                       machineID: machineID,
                                       oneTimePassword: oneTimePassword,

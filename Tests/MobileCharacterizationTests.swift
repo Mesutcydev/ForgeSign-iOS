@@ -895,6 +895,15 @@ struct LibraryStorageCleanupTests {
 @Suite("Refresh sources")
 @MainActor
 struct RefreshSourceStoreTests {
+    @Test("A Library refresh carries the installed bundle ID and original name")
+    func refreshRouting() {
+        let router = ImportRouter()
+        let kept = URL(fileURLWithPath: "/tmp/\(UUID().uuidString).ipa")
+        router.receiveRefresh(kept, bundleID: "com.example.app", name: "Example.ipa")
+        #expect(router.consume() == .refresh(kept, bundleID: "com.example.app", name: "Example.ipa"))
+        #expect(router.consume() == nil)
+    }
+
     private func tempDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("refresh-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

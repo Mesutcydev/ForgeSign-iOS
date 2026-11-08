@@ -143,6 +143,11 @@ final class AltServerProvisioningService: ObservableObject {
         guard let anisette = ALTAnisetteData(json: json) else {
             throw AltServerProvisioningError.invalidAnisetteData
         }
+        // Since October 2026 GrandSlam rejects sign-ins (-80045 / HTTP 503) whose
+        // User-Agent doesn't match the client that generated the anisette data.
+        // Remote v3 servers report theirs; other sources use AltSign's akd default.
+        // `authenticationUserAgent` comes from vendor/altsign-gsa-http503.patch.
+        ALTAppleAPI.shared.authenticationUserAgent = altServer.lastAuthenticationUserAgent
 
         phase = .authenticating
         let (account, session) = try await authenticate(appleID: cleanAppleID,

@@ -51,7 +51,7 @@ Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the
 
 The bootstrap verifies every source archive against `scripts/dependencies/lock.json`. It builds OpenSSL 3.5.9 from source for iOS arm64 and the host's simulator/macOS architecture, then prepares the pinned authentication-enabled AltSign package locally. Both AltSign and zsign use one embedded OpenSSL framework, with built-in default and legacy providers for modern and older P12 files. Generated dependencies are ignored by Git; rerun the bootstrap after changing the recipe, source pins or Xcode toolchain. No recursive Git clone or scheme-time dependency mutation is required.
 
-The bootstrap preserves the experimental `vendor/altsign-gsa-http503.patch`: a modern AuthKit User-Agent, a fresh connection per authentication request, bounded retries for Apple 5xx responses, and safe HTML-response diagnostics. Authentication still requires testing with a real account and 2FA. The compatibility patch also checks malformed/incorrect-password P12 imports before accessing their key or certificate.
+The bootstrap applies `vendor/altsign-gsa-http503.patch`, ported from AltSign's `notarized` branch: since October 2026 Apple's GrandSlam only accepts sign-ins whose User-Agent and client info match the client that generated the anisette data, so the patch adds `ALTAppleAPI.authenticationUserAgent` (ForgeSign passes the anisette server's `/v3/client_info` identity; akd's is the default) with the headers current clients send, a fresh connection per authentication request, bounded retries for Apple 5xx responses, safe HTML-response diagnostics, and SMS codes through Apple's current JSON endpoints. Authentication still requires testing with a real account and 2FA. The compatibility patch also checks malformed/incorrect-password P12 imports before accessing their key or certificate.
 
 Package a device build with the checked packaging script (the output must not already exist):
 
@@ -140,6 +140,17 @@ installed as an upgrade so app data survives.
 - Expiry scanning runs in the foreground. Background execution is **not**
   claimed: a sideloaded app cannot rely on `BGTaskScheduler`, and ForgeSign does
   not pretend otherwise.
+
+## What’s new in 2.8.2
+
+- **Apple Account sign-in with community anisette servers.** Since mid-October 2026 Apple's GrandSlam rejects sign-ins whose client identity doesn't match the anisette server that generated the data (-80045, or an HTML 503). ForgeSign now signs in with the User-Agent and client info the server reports in `/v3/client_info`, and requests SMS codes through Apple's current JSON endpoints (the plist form now fails with HTTP 415). Ported from AltSign's `notarized` branch onto the pinned revision.
+- **Refresh installs as an upgrade.** A Library refresh re-signs the kept original with the installed app's bundle ID and original file name, so it replaces the installed app instead of adding a second one.
+- **Provisioning no longer leaks a bundle ID.** A bundle ID filled in by Apple Account provisioning is cleared when you pick a different IPA, so the next app can't be signed with the previous app's identity.
+- **Packaging.** Apps whose name contains "Payload" (for example `PayloadKit.app`) are packaged with a correct `Payload/` root again, after signing and after dylib injection.
+- **Install server.** A file read error during an OTA transfer is reported instead of crashing the app, and a Range header the server can't use is ignored (full download) rather than refused. Returning to ForgeSign mid-download no longer silences the keep-alive, and a server that finished starting after a cancel is stopped.
+- **Everyday use.** The chosen certificate is remembered across launches, Keychain password lookups are no longer repeated on every redraw, deleting a certificate or profile asks first, 2FA codes can be filled from Messages, section titles are VoiceOver headings, and the AltServer row stops showing "Searching…" forever.
+
+[Full release notes](WHATS_NEW.md) · [Download the latest IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)
 
 ## What’s new in 2.8.1
 

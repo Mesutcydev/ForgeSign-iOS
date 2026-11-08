@@ -68,7 +68,11 @@ private struct ForgeRootView: View {
                 // never from the signed artifact — and re-enters the Sign tab so
                 // the same assets and verification run again.
                 if let source = refreshSources.sourceURL(for: record.id) {
-                    imports.receive(source)
+                    // Same bundle ID and file name as the original signing, so
+                    // the refresh installs as an upgrade and keeps app data.
+                    imports.receiveRefresh(source,
+                                           bundleID: record.bundleId,
+                                           name: refreshSources.sourceName(for: record.id) ?? record.inputName)
                 }
                 tab = 0
             })

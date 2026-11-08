@@ -480,7 +480,7 @@
     <div class="site-shell">
       <section class="hero" aria-labelledby="hero-title">
         <div>
-          <div class="pill">Version 2.8.1 · open source</div>
+          <div class="pill">Version 2.8.2 · open source</div>
           <p class="eyebrow">On-device IPA signer</p>
           <h1 id="hero-title">The calmer <span class="shine">way to sign.</span></h1>
           <p class="hero-copy">ForgeSign brings a focused signing, install, and library workflow to iPhone and iPad. Choose your materials, see what is ready, and keep the pass local.</p>
@@ -525,7 +525,7 @@
 
       <section class="metrics glass reveal" aria-label="ForgeSign highlights">
         <div class="metric"><strong>On-device</strong><span>Files and signing stay in your workflow.</span></div>
-        <div class="metric"><strong>2.8.1</strong><span>Readable on iPad, on top of the 2.8 pass.</span></div>
+        <div class="metric"><strong>2.8.2</strong><span>Apple Account sign-in restored, on top of 2.8.</span></div>
         <div class="metric"><strong>16+</strong><span>Built for iPhone and iPad.</span></div>
         <div class="metric"><strong>Open</strong><span>Inspect the project on GitHub.</span></div>
       </section>
@@ -533,12 +533,14 @@
       <section class="section" id="whats-new" aria-labelledby="release-title">
         <div class="release-panel glass reveal">
           <div>
-            <p class="eyebrow">Latest release · Version 2.8.1</p>
+            <p class="eyebrow">Latest release · Version 2.8.2</p>
             <h2 id="release-title">More reliable, from import to install.</h2>
-            <p>ForgeSign 2.8 improves the complete signing pass: safer imports, visible download progress, stronger preflight checks and reliable OTA delivery. Clear Liquid Glass stays at the center of the interface. 2.8.1 follows it with a readable iPad layout.</p>
+            <p>ForgeSign 2.8 improves the complete signing pass: safer imports, visible download progress, stronger preflight checks and reliable OTA delivery. Clear Liquid Glass stays at the center of the interface. 2.8.1 added a readable iPad layout, and 2.8.2 restores Apple Account sign-in with community anisette servers after Apple's October 2026 change.</p>
             <div class="hero-actions"><a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest">Read release notes</a></div>
           </div>
-          <div class="release-list" aria-label="What’s new in ForgeSign 2.8.1">
+          <div class="release-list" aria-label="What’s new in ForgeSign 2.8.2">
+            <div class="release-item"><b>✓</b><span>Apple Account sign-in uses the anisette server's own client identity, as Apple now requires.</span></div>
+            <div class="release-item"><b>✓</b><span>Library refresh re-signs the kept original as an upgrade of the installed app.</span></div>
             <div class="release-item"><b>✓</b><span>Readable iPad layout across Sign, Sources and Library, so a label stays beside its control.</span></div>
             <div class="release-item"><b>✓</b><span>Reliable OTA connections, partial downloads, cancellation and Library retry.</span></div>
             <div class="release-item"><b>✓</b><span>Download and import progress, with background copies that preserve your previous input on failure.</span></div>
@@ -606,7 +608,7 @@
           <div><p class="eyebrow">Questions, answered</p><h2 id="faq-title">Keep the edges clear.</h2></div>
           <div>
             <details open><summary>Is the downloaded IPA signed?</summary><p>No. The release is intentionally unsigned so you can sign it with your own certificate and provisioning profile before installing.</p></details>
-            <details><summary>What’s new in 2.8.1?</summary><p>2.8.1 keeps iPad content at a readable width instead of stretching every row across the display; iPhone layouts are unchanged. It sits on top of 2.8, which added download and copy progress, safer imports, stronger preflight checks and storage controls, fixed OTA connection failures and iOS 27 compatibility issues, preserved clear Liquid Glass, and updated the signing engines to OpenSSL 3.5.9 LTS. See the release notes for validation details.</p></details>
+            <details><summary>What’s new in 2.8.2?</summary><p>2.8.2 restores Apple Account sign-in with community anisette servers after Apple's October 2026 change, makes Library refresh install as an upgrade, and fixes packaging of apps named with "Payload". 2.8.1 keeps iPad content at a readable width instead of stretching every row across the display; iPhone layouts are unchanged. It sits on top of 2.8, which added download and copy progress, safer imports, stronger preflight checks and storage controls, fixed OTA connection failures and iOS 27 compatibility issues, preserved clear Liquid Glass, and updated the signing engines to OpenSSL 3.5.9 LTS. See the release notes for validation details.</p></details>
             <details><summary>What kind of dylib can be injected?</summary><p>Use a compatible, decrypted Mach-O dylib that matches the target architecture. Injection is performed on a disposable IPA copy before the existing signer; the original input is left untouched.</p></details>
             <details><summary>Does ForgeSign upload my files?</summary><p>The signing workflow is designed to run on-device. You remain responsible for the source IPAs, certificates, profiles, and modifications you choose to use.</p></details>
             <details><summary>Where is the source?</summary><p>ForgeSign is developed in public on <a href="https://github.com/Mesutcydev/ForgeSign-iOS"><u>GitHub</u></a>. Issues and release notes live there too.</p></details>
@@ -616,7 +618,7 @@
 
       <section class="section" aria-label="Download ForgeSign">
         <div class="final-cta glass reveal">
-          <div><h2>Ready for a quieter signing pass?</h2><p>Download ForgeSign 2.8.1 and bring your own signing materials.</p></div>
+          <div><h2>Ready for a quieter signing pass?</h2><p>Download ForgeSign 2.8.2 and bring your own signing materials.</p></div>
           <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa">Download latest IPA <span aria-hidden="true">↗</span></a>
         </div>
       </section>

@@ -3,6 +3,8 @@ name: ForgeSign iOS
 on:
   push:
     branches: [main, 'release/**']
+    # A version tag (e.g. v2.8.2) also publishes the validated IPA.
+    tags: ['v*']
   pull_request:
 
 permissions:
@@ -13,6 +15,15 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
+          if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Info.plist version $VERSION"
+            exit 1
+          fi
 
       - name: Show Xcode toolchain
         run: xcodebuild -version
@@ -90,3 +101,33 @@ jobs:
           path: build/ForgeSign-latest.ipa
           if-no-files-found: error
           retention-days: 14
+
+  # Publishes the IPA this run validated. Creates the release for the tag, or
+  # replaces its assets when the release was already drafted by hand.
+  release:
+    needs: validate
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Publish the validated IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh run download "$GITHUB_RUN_ID" --name ForgeSign-latest --dir release
+          test -f release/ForgeSign-latest.ipa
+          cp release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa"
+          (cd release && shasum -a 256 ForgeSign-latest.ipa "ForgeSign-$VERSION.ipa" > SHA256SUMS.txt)
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa" release/SHA256SUMS.txt --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa" release/SHA256SUMS.txt \
+              --title "ForgeSign $VERSION" \
+              --notes-file WHATS_NEW.md
+          fi

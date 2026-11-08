@@ -18,6 +18,9 @@ struct ContentView: View {
     @State private var ipaURL: URL?
     @State private var password = ""
     @State private var bundleId = ""
+    /// Bundle ID that Apple Account provisioning filled in, so the next IPA
+    /// does not inherit it and install over the previous app.
+    @State private var autoBundleID: String?
     @State private var removeExtensions = false
     @State private var enableDocuments = false
     /// Off by default so existing signing is unchanged. On = AltStore's rule:
@@ -176,6 +179,7 @@ struct ContentView: View {
                 .alert("Two-Factor Authentication", isPresented: $altProvisioner.isRequestingVerificationCode) {
                     TextField("Six-digit code", text: $altProvisioner.verificationCode)
                         .keyboardType(.numberPad)
+                        .textContentType(.oneTimeCode)
                     Button("Cancel", role: .cancel) { altProvisioner.cancelVerification() }
                     Button("Continue") { altProvisioner.submitVerificationCode() }
                 } message: {
@@ -493,6 +497,8 @@ struct ContentView: View {
             switch request {
             case .ipa(let url): stageIPA(url)
             case .dylib(let url): stageDylib(url)
+            case .refresh(let url, let bundleID, let name):
+                stageIPA(url, as: name, bundleID: bundleID)
             }
         } else if let pending = repoStore.pendingIPA {
             repoStore.pendingIPA = nil
@@ -500,14 +506,23 @@ struct ContentView: View {
         }
     }
 
-    private func stageIPA(_ source: URL) {
+    /// - Parameters:
+    ///   - name: file name to stage under (a refresh's kept original is stored
+    ///     under an internal name; this keeps the output named after the app).
+    ///   - bundleID: bundle ID to sign with (a refresh reuses the installed one).
+    private func stageIPA(_ source: URL, as name: String? = nil, bundleID: String? = nil) {
         guard signer.canAcceptInput, !isImporting else { return }
         isImporting = true
         Task {
             defer { isImporting = false }
             do {
-                let localURL = try await signer.stage(source)
+                let localURL = try await signer.stage(source, as: name)
                 ipaURL = localURL
+                if let autoBundleID {
+                    if bundleId == autoBundleID { bundleId = "" }
+                    self.autoBundleID = nil
+                }
+                if let bundleID { bundleId = bundleID }
                 provisioningAudit = nil
                 signer.pruneStagedArchives(keeping: localURL)
                 preflightState = .inspecting
@@ -843,7 +858,8 @@ struct ContentView: View {
                     }
                 }
                 bundleId = response.rootBundleIdentifier
-                certStore.selectedID = importedCertificate.id
+                autoBundleID = response.rootBundleIdentifier
+                certStore.select(importedCertificate.id)
                 if let rootProfile = profileStore.profiles.first(where: {
                     importedProfileIDs.contains($0.id)
                         && $0.applicationIdentifier?.hasSuffix(".\(response.rootBundleIdentifier)") == true

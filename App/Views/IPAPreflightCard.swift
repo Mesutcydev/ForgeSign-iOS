@@ -108,7 +108,7 @@ struct IPAPreflightCard: View {
                 MonoText(text: audit == nil
                          ? "Checking imported profiles…"
                          : "Each extension and nested app needs a matching profile. A wildcard profile can cover multiple bundle IDs.",
-                         size: 9, color: T.ink4)
+                         size: 9, color: T.ink3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 11)

@@ -14,6 +14,7 @@ struct CertificatesSheet: View {
     @State private var pendingPassword = ""
     @State private var rememberPassword = true
     @State private var error: String?
+    @State private var pendingDelete: CertificateRecord?
 
     var body: some View {
         NavigationStack {
@@ -62,6 +63,15 @@ struct CertificatesSheet: View {
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
+                .confirmationDialog("Delete this certificate?",
+                                    isPresented: Binding(get: { pendingDelete != nil },
+                                                         set: { if !$0 { pendingDelete = nil } }),
+                                    titleVisibility: .visible,
+                                    presenting: pendingDelete) { cert in
+                    Button("Delete \(cert.displayName)", role: .destructive) { store.delete(cert) }
+                } message: { _ in
+                    Text("The .p12 file and its saved Keychain password are removed from this device.")
+                }
                 .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
                     guard case .success(let urls) = result, let url = urls.first else { return }
                     guard ["p12", "pfx"].contains(url.pathExtension.lowercased()) else {
@@ -124,7 +134,7 @@ struct CertificatesSheet: View {
         let expiry = P12Inspector.expiry(cert.notAfter)
 
         return Button {
-            store.selectedID = cert.id
+            store.select(cert.id)
         } label: {
             (typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))) {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
@@ -162,7 +172,7 @@ struct CertificatesSheet: View {
         }
         .buttonStyle(GlassTactileButtonStyle())
         .contextMenu {
-            Button("Delete", role: .destructive) { store.delete(cert) }
+            Button("Delete…", role: .destructive) { pendingDelete = cert }
         }
     }
 

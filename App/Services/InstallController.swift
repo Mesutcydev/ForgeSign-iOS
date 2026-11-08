@@ -26,31 +26,52 @@ final class InstallController: ObservableObject {
     }
 
     private var operation: Operation?
-    private var foregroundObserver: (any NSObjectProtocol)?
+    private var lifecycleObservers: [any NSObjectProtocol] = []
 
     private func observeForeground(for id: UUID) {
         endObservation()
-        foregroundObserver = NotificationCenter.default.addObserver(
+        let center = NotificationCenter.default
+        lifecycleObservers.append(center.addObserver(
             forName: UIApplication.willEnterForegroundNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.operation?.id == id, self.operation?.delivered == false else { return }
-                InstallKeepAlive.shared.stop()
+                guard let self, let operation = self.operation,
+                      operation.id == id, !operation.delivered else { return }
+                // Returning before iOS asked for any bytes means the install is
+                // still waiting on the prompt (or was abandoned): silence the
+                // keep-alive. Once the download has started it must keep
+                // running, or leaving again lets the background task expire
+                // and cancel the transfer mid-way.
+                if operation.transferFraction == 0 {
+                    InstallKeepAlive.shared.stop()
+                }
                 if self.installStatus.hasPrefix("Waiting for iOS") {
                     self.installStatus = "Waiting for iOS to request the IPA. If no install prompt appeared, try “Retry via Safari”."
                     self.emit(.awaitingSystem, self.installStatus)
                 }
             }
-        }
+        })
+        lifecycleObservers.append(center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let operation = self.operation,
+                      operation.id == id, !operation.delivered else { return }
+                // The server is still waiting for iOS: keep the process alive.
+                InstallKeepAlive.shared.start()
+            }
+        })
     }
 
     private func endObservation() {
-        if let foregroundObserver {
-            NotificationCenter.default.removeObserver(foregroundObserver)
-            self.foregroundObserver = nil
+        for observer in lifecycleObservers {
+            NotificationCenter.default.removeObserver(observer)
         }
+        lifecycleObservers.removeAll()
     }
 
     func install(ipa: URL, bundleId: String, version: String, recordID: UUID? = nil) {
@@ -78,8 +99,9 @@ final class InstallController: ObservableObject {
                 let server = LocalInstallServer()
                 _ = try await server.start(ipa: ipa, bundleId: bundleId, bundleVersion: version,
                                            title: ipa.deletingPathExtension().lastPathComponent)
-                try Task.checkCancellation()
-                guard self.operation?.id == id else {
+                // Cancelled while the server was starting: nothing else owns
+                // it yet, so stop it here or its listener and port leak.
+                guard !Task.isCancelled, self.operation?.id == id else {
                     server.stop()
                     return
                 }

@@ -12,6 +12,7 @@ struct ProfilesSheet: View {
 
     @State private var showImporter = false
     @State private var error: String?
+    @State private var pendingDelete: ProfileRecord?
 
     var body: some View {
         NavigationStack {
@@ -56,6 +57,15 @@ struct ProfilesSheet: View {
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
+                .confirmationDialog("Delete this profile?",
+                                    isPresented: Binding(get: { pendingDelete != nil },
+                                                         set: { if !$0 { pendingDelete = nil } }),
+                                    titleVisibility: .visible,
+                                    presenting: pendingDelete) { profile in
+                    Button("Delete \(profile.displayName)", role: .destructive) { store.delete(profile) }
+                } message: { _ in
+                    Text("The provisioning profile is removed from this device.")
+                }
                 .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
                     guard case .success(let urls) = result, let url = urls.first else { return }
                     guard url.pathExtension.lowercased() == "mobileprovision" else {
@@ -153,7 +163,7 @@ struct ProfilesSheet: View {
         }
         .buttonStyle(GlassTactileButtonStyle())
         .contextMenu {
-            Button("Delete", role: .destructive) { store.delete(profile) }
+            Button("Delete…", role: .destructive) { pendingDelete = profile }
         }
     }
 

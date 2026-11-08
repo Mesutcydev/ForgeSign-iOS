@@ -1,3 +1,4 @@
 # Keep upstream license text and patch context verbatim.
 App/Resources/ThirdPartyNotices.txt -whitespace
 scripts/dependencies/*.patch -whitespace
+vendor/*.patch -whitespace

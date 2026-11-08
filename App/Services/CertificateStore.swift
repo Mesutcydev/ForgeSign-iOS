@@ -25,6 +25,11 @@ final class CertificateStore: ObservableObject {
 
     private let dir: URL
     private let indexURL: URL
+    /// Keychain reads are synchronous IPC and the Sign screen asks on every
+    /// redraw, so lookups are memoised per certificate. Every write or delete
+    /// of a password goes through this store and invalidates its entry.
+    private var passwordCache: [UUID: String] = [:]
+    private var passwordMisses: Set<UUID> = []
 
     private struct Index: Codable {
         var certificates: [CertificateRecord] = []
@@ -49,7 +54,25 @@ final class CertificateStore: ObservableObject {
     }
 
     func savedPassword(for record: CertificateRecord) -> String? {
-        PasswordVault.password(for: record.id)
+        if let cached = passwordCache[record.id] { return cached }
+        if passwordMisses.contains(record.id) { return nil }
+        guard let password = PasswordVault.password(for: record.id) else {
+            passwordMisses.insert(record.id)
+            return nil
+        }
+        passwordCache[record.id] = password
+        return password
+    }
+
+    /// Selects a certificate and remembers the choice across launches.
+    func select(_ id: UUID?) {
+        selectedID = id
+        save()
+    }
+
+    private func forgetCachedPassword(for id: UUID) {
+        passwordCache[id] = nil
+        passwordMisses.remove(id)
     }
 
     enum ImportError: LocalizedError {
@@ -107,6 +130,7 @@ final class CertificateStore: ObservableObject {
         )
 
         if rememberPassword {
+            forgetCachedPassword(for: record.id)
             guard PasswordVault.save(password, for: record.id) else {
                 try? FileManager.default.removeItem(at: dest)
                 return .failure(.copyFailed)
@@ -145,6 +169,7 @@ final class CertificateStore: ObservableObject {
            let existing = certificates.first(where: {
                $0.certificateSHA256?.caseInsensitiveCompare(fingerprint) == .orderedSame
            }) {
+            forgetCachedPassword(for: existing.id)
             if rememberPassword && !PasswordVault.save(password, for: existing.id) {
                 return .failure(.copyFailed)
             }
@@ -160,6 +185,7 @@ final class CertificateStore: ObservableObject {
 
     func delete(_ record: CertificateRecord) {
         PasswordVault.delete(for: record.id)
+        forgetCachedPassword(for: record.id)
         try? FileManager.default.removeItem(at: fileURL(for: record))
         certificates.removeAll { $0.id == record.id }
         if selectedID == record.id {

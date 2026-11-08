@@ -140,7 +140,9 @@ struct GlassSection<Content: View>: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 CaptionText(text: title)
+                    .accessibilityAddTraits(.isHeader)
                 Rectangle().fill(T.rule).frame(height: 1)
+                    .accessibilityHidden(true)
             }
             .padding(.bottom, 10)
 

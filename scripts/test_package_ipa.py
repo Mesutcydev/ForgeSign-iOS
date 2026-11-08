@@ -65,6 +65,14 @@ class PackagingTests(unittest.TestCase):
         self.executable.chmod(0o644)
         with self.assertRaisesRegex(ValueError, "executable file"):
             package_app(self.app, self.source)
+        # A rejected package is removed so the next run can reuse the path.
+        self.assertFalse(self.source.exists())
+
+    def test_missing_executable_is_a_validation_error(self):
+        self.executable.unlink()
+        with self.assertRaisesRegex(ValueError, "executable is missing"):
+            package_app(self.app, self.source)
+        self.assertFalse(self.source.exists())
 
     def test_refuses_to_overwrite_input(self):
         package_app(self.app, self.source)
