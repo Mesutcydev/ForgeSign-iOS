@@ -118,12 +118,14 @@ struct IPAPreflightCard: View {
 
     private var auditStatusText: String {
         guard let audit else { return "checking" }
-        return audit.isReady ? "ready" : "action needed"
+        if !audit.isReady { return "action needed" }
+        return audit.usesSelectedProfileFallback ? "selected profile" : "ready"
     }
 
     private var auditStatusColor: Color {
         guard let audit else { return T.ink3 }
-        return audit.isReady ? T.good : T.bad
+        if !audit.isReady { return T.bad }
+        return audit.usesSelectedProfileFallback ? T.warn : T.good
     }
 
     private func valueRow(_ label: String, _ value: String) -> some View {
@@ -245,6 +247,7 @@ private struct ProvisioningAuditRowView: View {
         switch row.state {
         case .ready: return "checkmark.seal.fill"
         case .warning: return "questionmark.diamond.fill"
+        case .selectedProfileFallback: return "exclamationmark.circle.fill"
         case .removed: return "minus.circle.fill"
         default: return "exclamationmark.triangle.fill"
         }
@@ -253,7 +256,7 @@ private struct ProvisioningAuditRowView: View {
     private var color: Color {
         switch row.state {
         case .ready: return T.good
-        case .warning, .removed: return T.warn
+        case .warning, .selectedProfileFallback, .removed: return T.warn
         default: return T.bad
         }
     }
@@ -262,6 +265,7 @@ private struct ProvisioningAuditRowView: View {
         switch row.state {
         case .ready: return "ready"
         case .warning: return "check device"
+        case .selectedProfileFallback: return "selected profile"
         case .removed: return "removed"
         case .missingProfile: return "missing profile"
         case .wrongTeam: return "wrong team"

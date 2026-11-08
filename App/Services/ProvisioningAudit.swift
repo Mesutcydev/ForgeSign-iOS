@@ -3,6 +3,10 @@ import Foundation
 enum ProvisioningCheckState: Equatable, Sendable {
     case ready
     case warning
+    /// The main app has a custom bundle ID that no imported profile covers,
+    /// so the selected profile signs it (zsign's root fallback for a
+    /// re-bundled app). Every other profile check still applies.
+    case selectedProfileFallback
     case removed
     case missingProfile
     case wrongTeam
@@ -13,7 +17,7 @@ enum ProvisioningCheckState: Equatable, Sendable {
 
     var isBlocking: Bool {
         switch self {
-        case .ready, .warning, .removed: return false
+        case .ready, .warning, .selectedProfileFallback, .removed: return false
         default: return true
         }
     }
@@ -38,6 +42,12 @@ struct ProvisioningAudit: Equatable, Sendable {
     let selectedProfileIDs: [UUID]
 
     var isReady: Bool { !rows.contains { $0.state.isBlocking } }
+
+    /// True when the main app will be signed with the selected profile even
+    /// though that profile's app ID does not cover its custom bundle ID.
+    var usesSelectedProfileFallback: Bool {
+        rows.contains { $0.state == .selectedProfileFallback }
+    }
 
     /// True when only app extensions (not the app, a watch app or an App
     /// Clip) lack a usable profile, so removing extensions lets the app sign.
@@ -93,6 +103,22 @@ enum ProvisioningAuditService {
                                certificate: certificate,
                                deviceIdentifier: deviceIdentifier,
                                now: now)
+            // A custom bundle ID that no imported profile covers keeps the
+            // established manual path: the native signer uses the first
+            // supplied profile for the main app (never for nested bundles).
+            if bundle.kind == .app,
+               rootResolvedID != rootOriginalID,
+               result.state == .missingProfile,
+               result.profileID == nil,
+               let preferredProfileID,
+               let selected = profiles.first(where: { $0.id == preferredProfileID }) {
+                return selectedProfileFallback(selected, bundle: bundle,
+                                               resolvedBundleID: resolvedID,
+                                               noMatchRow: result,
+                                               certificate: certificate,
+                                               deviceIdentifier: deviceIdentifier,
+                                               now: now)
+            }
             return result
         }
 
@@ -170,7 +196,7 @@ enum ProvisioningAuditService {
         }
 
         guard profile.profileIsAuthentic else {
-            return makeRow(.missingProfile, "The matching profile failed authenticity validation.")
+            return makeRow(.missingProfile, "Profile “\(profile.displayName)” failed authenticity validation.")
         }
         if let expiry = certificate?.notAfter, expiry.timeIntervalSince(now) <= 0 {
             return makeRow(.expired, "The selected signing certificate has expired.")
@@ -203,24 +229,69 @@ enum ProvisioningAuditService {
         }
         if !bundle.requiredAppGroups.isEmpty && profile.appGroups.isEmpty {
             return makeRow(.missingAppGroups,
-                           "The matching profile does not grant the App Groups required by this bundle.")
+                           "Profile “\(profile.displayName)” does not grant the App Groups required by this bundle.")
         }
 
-        // With a known device but no device list on the profile (a plist
-        // omission, not an all-devices profile), membership cannot be
-        // confirmed — do not read the omission as "every device covered".
-        // Without a device identifier the original .ready behavior stands.
-        let coverageUnknown = profile.provisionsAllDevices != true &&
-            deviceIdentifier != nil && profile.provisionedDevices.isEmpty
-        let entitlementUnknown = !bundle.entitlementsAvailable
-        if coverageUnknown || entitlementUnknown {
-            var warnings: [String] = []
-            if coverageUnknown { warnings.append("device membership cannot be confirmed on-device") }
-            if entitlementUnknown { warnings.append("original entitlement metadata is unavailable") }
+        let warnings = unconfirmedCoverage(profile: profile, bundle: bundle,
+                                           deviceIdentifier: deviceIdentifier)
+        if !warnings.isEmpty {
             return makeRow(.warning,
                            "Profile “\(profile.displayName)” matches; \(warnings.joined(separator: "; ")).")
         }
         return makeRow(.ready, "Profile “\(profile.displayName)” matches.")
+    }
+
+    /// With a known device but no device list on the profile (a plist
+    /// omission, not an all-devices profile), membership cannot be
+    /// confirmed — do not read the omission as "every device covered".
+    /// Without a device identifier the original .ready behavior stands.
+    private static func unconfirmedCoverage(profile: ProfileRecord,
+                                            bundle: SignableBundleInspection,
+                                            deviceIdentifier: String?) -> [String] {
+        var warnings: [String] = []
+        if profile.provisionsAllDevices != true && deviceIdentifier != nil &&
+            profile.provisionedDevices.isEmpty {
+            warnings.append("device membership cannot be confirmed on-device")
+        }
+        if !bundle.entitlementsAvailable {
+            warnings.append("original entitlement metadata is unavailable")
+        }
+        return warnings
+    }
+
+    /// The selected profile stands in for a main app whose custom bundle ID
+    /// no imported profile covers. It still has to pass every other check,
+    /// so an expired, wrong-team or wrong-device setup stops before signing.
+    private static func selectedProfileFallback(_ profile: ProfileRecord,
+                                                bundle: SignableBundleInspection,
+                                                resolvedBundleID: String,
+                                                noMatchRow: ProvisioningAuditRow,
+                                                certificate: CertificateRecord?,
+                                                deviceIdentifier: String?,
+                                                now: Date) -> ProvisioningAuditRow {
+        let evaluation = evaluate(profile: profile, bundle: bundle,
+                                  resolvedBundleID: resolvedBundleID,
+                                  certificate: certificate,
+                                  deviceIdentifier: deviceIdentifier,
+                                  now: now)
+        guard !evaluation.state.isBlocking else {
+            return row(bundle: bundle, resolvedBundleID: resolvedBundleID,
+                       state: noMatchRow.state,
+                       detail: "\(noMatchRow.detail) The selected profile can't be used instead: \(evaluation.detail)")
+        }
+
+        let appID = profile.applicationIdentifier.map { " (\($0))" } ?? ""
+        var detail = "No imported profile matches this bundle ID, so the selected profile "
+            + "“\(profile.displayName)”\(appID) will sign the app. iOS can refuse to install an app "
+            + "whose bundle ID its profile doesn't cover; a wildcard profile or Apple Account "
+            + "provisioning avoids that."
+        let warnings = unconfirmedCoverage(profile: profile, bundle: bundle,
+                                           deviceIdentifier: deviceIdentifier)
+        if !warnings.isEmpty {
+            detail += " Also, \(warnings.joined(separator: "; "))."
+        }
+        return row(bundle: bundle, resolvedBundleID: resolvedBundleID,
+                   state: .selectedProfileFallback, detail: detail, profile: profile)
     }
 
     private static func enforceSharedAppGroups(in rows: inout [ProvisioningAuditRow]) {
