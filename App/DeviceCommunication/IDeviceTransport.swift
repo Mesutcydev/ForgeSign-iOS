@@ -66,9 +66,7 @@ final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
     }
 
     func closeSession() async {
-        lock.lock()
-        closeRequested = true
-        lock.unlock()
+        requestClose()
         await Task.detached(priority: .utility) { [self] in
             closeSessionSync()
         }.value
@@ -416,6 +414,13 @@ final class IDeviceTransport: DeviceTransporting, @unchecked Sendable {
                 ? DeviceTransportError.upgradeFailed(mapped.userFacingReason)
                 : DeviceTransportError.installFailed(mapped.userFacingReason)
         }
+    }
+
+    /// Synchronous so it can take `lock` (NSLock is unavailable in async code).
+    private func requestClose() {
+        lock.lock()
+        closeRequested = true
+        lock.unlock()
     }
 
     private var isCloseRequested: Bool {
