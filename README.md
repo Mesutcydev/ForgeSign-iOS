@@ -141,6 +141,14 @@ installed as an upgrade so app data survives.
   claimed: a sideloaded app cannot rely on `BGTaskScheduler`, and ForgeSign does
   not pretend otherwise.
 
+## What’s new in 2.8.1
+
+- Sign, Sources and Library keep their content at a readable width, so an iPad no longer stretches every row across the display and separates a label from its control. iPhone layouts are unchanged.
+- Checksum-pinned dependency downloads retry a temporary network failure, and still refuse any archive whose checksum does not match.
+- Validated with 79 simulator tests and an iPad pass over both orientations, both appearances and the largest accessibility text size.
+
+[Full release notes](WHATS_NEW.md) · [Download the latest IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)
+
 ## What’s new in 2.8
 
 - Reliable OTA connections, partial downloads and cancellation, with install retry and recovery in Library.
