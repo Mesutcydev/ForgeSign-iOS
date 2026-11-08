@@ -7,6 +7,9 @@ final class ImportRouter: ObservableObject {
         case ipa(URL)
         case dylib(URL)
         case pairingFile(URL)
+        /// A Library refresh: re-sign a kept original under its original name
+        /// and with the bundle ID the installed app has, so it upgrades in place.
+        case refresh(URL, bundleID: String, name: String)
     }
 
     @Published private(set) var pending: Destination?
@@ -31,6 +34,12 @@ final class ImportRouter: ObservableObject {
         default:
             pending = nil
         }
+    }
+
+    /// Library refresh entry point. Unlike `receive(_:)`, it carries the signed
+    /// bundle ID and original file name, which the kept copy no longer has.
+    func receiveRefresh(_ url: URL, bundleID: String, name: String) {
+        pending = .refresh(url, bundleID: bundleID, name: name)
     }
 
     func consume() -> Destination? {

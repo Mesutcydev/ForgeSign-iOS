@@ -57,6 +57,8 @@ struct ContentView: View {
     private struct DeferredIPA {
         let url: URL
         let fallbackToSource: Bool
+        let name: String?
+        let bundleID: String?
     }
 
     /// Signing or provisioning is running; inputs are locked until it ends.
@@ -213,6 +215,8 @@ struct ContentView: View {
                     guard let request = imports.consume() else { return }
                     switch request {
                     case .ipa(let url): stageIPA(url)
+                    case .refresh(let url, let bundleID, let name):
+                        stageIPA(url, as: name, bundleID: bundleID)
                     case .dylib(let url): stageDylib(url)
                     case .pairingFile(let url):
                         // Import straight into the Keychain; the Device
@@ -236,7 +240,8 @@ struct ContentView: View {
                     if !isBusy, let deferred = deferredIPA {
                         deferredIPA = nil
                         signNotice = nil
-                        stageIPA(deferred.url, fallbackToSource: deferred.fallbackToSource)
+                        stageIPA(deferred.url, fallbackToSource: deferred.fallbackToSource,
+                                 as: deferred.name, bundleID: deferred.bundleID)
                     }
                 }
             }
@@ -563,11 +568,17 @@ struct ContentView: View {
 
     // MARK: - Logic
 
-    private func stageIPA(_ source: URL, fallbackToSource: Bool = false) {
+    /// - Parameters:
+    ///   - name: file name to stage under (a refresh's kept original is stored
+    ///     under an internal name; this keeps the output named after the app).
+    ///   - bundleID: bundle ID to sign with (a refresh reuses the installed one).
+    private func stageIPA(_ source: URL, fallbackToSource: Bool = false,
+                          as name: String? = nil, bundleID: String? = nil) {
         // Staging prunes the other archives in the work folder, which would
         // delete the package a running sign or provisioning pass still reads.
         guard !isBusy else {
-            deferredIPA = DeferredIPA(url: source, fallbackToSource: fallbackToSource)
+            deferredIPA = DeferredIPA(url: source, fallbackToSource: fallbackToSource,
+                                      name: name, bundleID: bundleID)
             signNotice = "A new IPA arrived while signing. It will load when this run finishes."
             return
         }
@@ -575,7 +586,7 @@ struct ContentView: View {
             if bundleId == autoBundleID { bundleId = "" }
             self.autoBundleID = nil
         }
-        let localURL = signer.stage(source) ?? (fallbackToSource ? source : nil)
+        let localURL = signer.stage(source, as: name) ?? (fallbackToSource ? source : nil)
         guard let localURL else {
             ipaURL = nil
             preflightState = .failed("The IPA could not be copied into ForgeSign storage.")
@@ -583,6 +594,7 @@ struct ContentView: View {
         }
 
         ipaURL = localURL
+        if let bundleID { bundleId = bundleID }
         provisioningAudit = nil
         signer.pruneStagedArchives(keeping: localURL)
         guard FileManager.default.fileExists(atPath: localURL.path) else {
