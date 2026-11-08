@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#edf2f8">
+  <meta name="theme-color" content="#edf2f8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#15181e" media="(prefers-color-scheme: dark)">
   <meta name="description" content="ForgeSign is a calm, local-first IPA signing workflow for iPhone and iPad.">
   <title>ForgeSign — Sign IPAs on-device</title>
   <link rel="icon" href="./assets/forgesign-icon.png" type="image/png">
@@ -26,6 +27,7 @@
       --blue: #91b2d7;
       --lavender: #b9afd8;
       --green: #6f9e88;
+      --glint: rgba(255, 255, 255, .62);
       --shadow: 0 28px 80px rgba(50, 67, 91, .16);
       --shadow-soft: 0 12px 36px rgba(50, 67, 91, .10);
       --radius: 28px;
@@ -51,6 +53,7 @@
         --blue: #617e9f;
         --lavender: #716a92;
         --green: #6d9a83;
+        --glint: rgba(255, 255, 255, .10);
         --shadow: 0 28px 80px rgba(0, 0, 0, .34);
         --shadow-soft: 0 12px 36px rgba(0, 0, 0, .24);
       }
@@ -69,44 +72,64 @@
       overflow-x: hidden;
     }
 
-    body::before,
-    body::after {
-      content: "";
-      position: fixed;
-      z-index: -1;
-      width: 38rem;
-      height: 38rem;
+    /* ---------- drifting aurora ---------- */
+
+    .aurora { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; }
+    .aurora span {
+      position: absolute;
+      display: block;
+      width: 42rem;
+      height: 42rem;
       border-radius: 50%;
-      filter: blur(12px);
-      opacity: .48;
-      pointer-events: none;
+      filter: blur(14px);
+      opacity: .5;
+      will-change: transform;
+    }
+    .aurora span:nth-child(1) {
+      top: -22rem; left: -13rem;
+      background: radial-gradient(circle, rgba(145, 178, 215, .56), transparent 68%);
+      animation: drift-a 26s ease-in-out infinite;
+    }
+    .aurora span:nth-child(2) {
+      right: -16rem; top: 20rem;
+      background: radial-gradient(circle, rgba(185, 175, 216, .48), transparent 68%);
+      animation: drift-b 32s ease-in-out infinite;
+    }
+    .aurora span:nth-child(3) {
+      left: 28%; bottom: -26rem;
+      background: radial-gradient(circle, rgba(111, 158, 136, .34), transparent 68%);
+      animation: drift-c 38s ease-in-out infinite;
     }
 
-    body::before {
-      top: -19rem;
-      left: -11rem;
-      background: radial-gradient(circle, rgba(145, 178, 215, .54), transparent 68%);
+    @keyframes drift-a {
+      0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+      50% { transform: translate3d(5rem, 4rem, 0) scale(1.12); }
     }
-
-    body::after {
-      right: -14rem;
-      top: 24rem;
-      background: radial-gradient(circle, rgba(185, 175, 216, .46), transparent 68%);
+    @keyframes drift-b {
+      0%, 100% { transform: translate3d(0, 0, 0) scale(1.05); }
+      50% { transform: translate3d(-6rem, 3rem, 0) scale(.92); }
+    }
+    @keyframes drift-c {
+      0%, 100% { transform: translate3d(0, 0, 0) scale(.95); }
+      50% { transform: translate3d(4rem, -5rem, 0) scale(1.1); }
     }
 
     a { color: inherit; text-decoration: none; }
     img { display: block; max-width: 100%; }
     button, a { -webkit-tap-highlight-color: transparent; }
+    :focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; border-radius: 6px; }
 
     .site-shell { width: min(calc(100% - 40px), var(--max)); margin: 0 auto; }
 
     .glass {
       background: var(--surface);
       border: 1px solid var(--line);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .62), var(--shadow-soft);
+      box-shadow: inset 0 1px 0 var(--glint), var(--shadow-soft);
       -webkit-backdrop-filter: blur(24px) saturate(145%);
       backdrop-filter: blur(24px) saturate(145%);
     }
+
+    /* ---------- navigation ---------- */
 
     .site-nav {
       position: sticky;
@@ -118,201 +141,326 @@
       gap: 24px;
       width: min(calc(100% - 40px), var(--max));
       margin: 16px auto 0;
-      padding: 10px 12px 10px 16px;
+      padding: 11px 13px 11px 17px;
       border-radius: 22px;
+      overflow: hidden;
     }
+    .scroll-progress {
+      position: absolute;
+      left: 0; bottom: 0;
+      height: 2px;
+      width: 100%;
+      transform: scaleX(0);
+      transform-origin: 0 50%;
+      background: linear-gradient(90deg, var(--blue), var(--lavender), var(--green));
+    }
+    .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -.03em; }
+    .brand img { width: 27px; height: 27px; border-radius: 8px; }
+    .nav-links { display: flex; align-items: center; gap: 7px; font-size: .88rem; color: var(--muted); }
+    .nav-links > a { padding: 8px 11px; border-radius: 11px; transition: color .2s ease, background .2s ease; }
+    .nav-links > a:hover { color: var(--ink); background: var(--surface-muted); }
+    .nav-cta {
+      color: var(--on-accent) !important;
+      background: var(--accent);
+      font-weight: 700;
+    }
+    .nav-cta:hover { background: var(--accent) !important; filter: brightness(1.08); }
 
-    .brand { display: inline-flex; align-items: center; gap: 11px; font-weight: 700; letter-spacing: -.03em; }
-    .brand img { width: 38px; height: 38px; border-radius: 12px; box-shadow: 0 5px 14px rgba(51, 61, 75, .18); }
-    .brand span { font-size: 1.05rem; }
-    .nav-links { display: flex; align-items: center; gap: 22px; color: var(--muted); font-size: .9rem; }
-    .nav-links a { transition: color .2s ease; }
-    .nav-links a:hover, .nav-links a:focus-visible { color: var(--ink); }
-    .nav-cta { padding: 9px 15px; border-radius: 13px; color: var(--ink); background: var(--surface-strong); border: 1px solid var(--line); font-weight: 650; }
+    /* ---------- hero ---------- */
 
     .hero {
       display: grid;
-      grid-template-columns: minmax(0, 1.02fr) minmax(340px, .98fr);
+      grid-template-columns: minmax(0, 1.04fr) minmax(0, .96fr);
+      gap: 48px;
       align-items: center;
-      gap: clamp(42px, 7vw, 96px);
-      min-height: 710px;
-      padding: 96px 0 76px;
+      padding: 76px 0 36px;
     }
-
-    .eyebrow {
-      margin: 0 0 18px;
-      color: var(--muted);
-      font-size: .73rem;
-      font-weight: 750;
-      letter-spacing: .16em;
-      text-transform: uppercase;
-    }
-
     .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 9px;
-      margin-bottom: 21px;
-      padding: 7px 11px;
-      border: 1px solid var(--line);
-      border-radius: 99px;
-      color: var(--muted);
-      background: var(--surface);
-      font-size: .72rem;
-      font-weight: 700;
-      letter-spacing: .11em;
-      text-transform: uppercase;
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5);
-      -webkit-backdrop-filter: blur(16px);
-      backdrop-filter: blur(16px);
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 13px; border-radius: 999px;
+      border: 1px solid var(--line-strong);
+      background: var(--surface-strong);
+      font-size: .77rem; font-weight: 650; color: var(--muted);
     }
-
-    .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(111, 158, 136, .14); }
-    h1, h2, h3, p { margin-top: 0; }
-    h1 { max-width: 720px; margin-bottom: 23px; font-size: clamp(3.3rem, 7vw, 6.2rem); line-height: .96; letter-spacing: -.075em; font-weight: 760; }
-    .hero-copy { max-width: 570px; color: var(--muted); font-size: clamp(1.05rem, 1.7vw, 1.24rem); line-height: 1.55; }
+    .pill::before {
+      content: ""; width: 7px; height: 7px; border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 0 rgba(111, 158, 136, .55);
+      animation: pulse 2.6s ease-out infinite;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(111, 158, 136, .55); }
+      70% { box-shadow: 0 0 0 9px rgba(111, 158, 136, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(111, 158, 136, 0); }
+    }
+    .eyebrow {
+      margin: 19px 0 0;
+      font-size: .74rem; font-weight: 750; letter-spacing: .16em;
+      text-transform: uppercase; color: var(--faint);
+    }
+    h1 {
+      margin: 11px 0 0;
+      font-size: clamp(2.7rem, 6vw, 4.9rem);
+      line-height: .96; letter-spacing: -.07em; font-weight: 760;
+    }
+    h1 .shine {
+      background: linear-gradient(100deg, var(--ink) 18%, var(--blue) 38%, var(--lavender) 52%, var(--ink) 72%);
+      background-size: 280% 100%;
+      -webkit-background-clip: text; background-clip: text;
+      color: transparent;
+      animation: sweep 7s ease-in-out infinite;
+    }
+    @keyframes sweep {
+      0%, 100% { background-position: 150% 0; }
+      50% { background-position: -40% 0; }
+    }
+    .hero-copy { margin: 19px 0 0; max-width: 46ch; color: var(--muted); font-size: 1.04rem; }
     .hero-actions { display: flex; flex-wrap: wrap; gap: 11px; margin-top: 30px; }
-    .button { display: inline-flex; align-items: center; justify-content: center; gap: 9px; min-height: 47px; padding: 12px 17px; border-radius: 15px; border: 1px solid var(--line-strong); font-size: .91rem; font-weight: 700; transition: transform .2s ease, box-shadow .2s ease, background .2s ease; }
+    .button {
+      display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+      min-height: 47px; padding: 12px 17px; border-radius: 15px;
+      border: 1px solid var(--line-strong);
+      font-size: .91rem; font-weight: 700;
+      transition: transform .2s ease, box-shadow .2s ease, background .2s ease;
+    }
     .button:hover, .button:focus-visible { transform: translateY(-2px); box-shadow: 0 12px 24px rgba(46, 58, 75, .14); }
     .button-primary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
     .button-secondary { background: var(--surface-strong); }
     .availability { display: flex; flex-wrap: wrap; gap: 17px; margin-top: 27px; color: var(--faint); font-size: .82rem; }
     .availability span { display: inline-flex; align-items: center; gap: 7px; }
-    .availability span::before { content: ""; width: 4px; height: 4px; border-radius: 50%; background: var(--faint); }
+    .availability span::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--blue); }
 
-    .hero-stage { position: relative; display: grid; place-items: center; min-height: 590px; }
-    .hero-stage::before { content: ""; position: absolute; inset: 10% 2% 9%; border-radius: 48% 52% 42% 58%; background: radial-gradient(circle at 40% 30%, rgba(145, 178, 215, .35), transparent 52%), radial-gradient(circle at 72% 64%, rgba(185, 175, 216, .32), transparent 54%); filter: blur(4px); }
+    /* ---------- hero stage: rail + device ---------- */
+
+    .hero-stage { position: relative; display: grid; gap: 22px; justify-items: center; }
+
+    .pass-rail {
+      position: relative;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      width: min(100%, 390px);
+      padding: 13px 10px 11px;
+      border-radius: 19px;
+    }
+    .rail-line {
+      position: absolute;
+      left: 16%; right: 16%; top: 19px;
+      height: 2px;
+      border-radius: 2px;
+      background: var(--line-strong);
+      overflow: hidden;
+    }
+    .rail-comet {
+      position: absolute; top: 0; left: 0;
+      width: 34%; height: 100%;
+      border-radius: 2px;
+      background: linear-gradient(90deg, transparent, var(--blue), transparent);
+      transform: translateX(-40%);
+      transition: transform .9s cubic-bezier(.65, 0, .2, 1);
+    }
+    .rail-step {
+      position: relative;
+      display: grid; justify-items: center; gap: 9px;
+      padding: 0; border: 0; background: none;
+      font: inherit; color: var(--faint); cursor: pointer;
+    }
+    .rail-dot {
+      position: relative;
+      width: 15px; height: 15px; border-radius: 50%;
+      border: 2px solid var(--line-strong);
+      background: var(--bg);
+      transition: border-color .35s ease, background .35s ease, transform .35s ease;
+    }
+    .rail-label { font-size: .74rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; transition: color .35s ease; }
+    .rail-step[aria-selected="true"] .rail-dot { border-color: var(--blue); background: var(--blue); transform: scale(1.22); }
+    .rail-step[aria-selected="true"] .rail-label { color: var(--ink); }
+
     .device {
       position: relative;
-      width: min(77%, 350px);
+      width: min(100%, 290px);
+      aspect-ratio: 9 / 19.3;
       padding: 9px;
-      border-radius: 42px;
-      background: linear-gradient(145deg, rgba(255,255,255,.82), rgba(185, 194, 207, .46));
-      border: 1px solid rgba(255,255,255,.82);
-      box-shadow: 0 34px 70px rgba(41, 55, 74, .22), inset 0 1px 0 rgba(255,255,255,.9);
-      transform: rotate(2.5deg);
+      border-radius: 44px;
+      background: linear-gradient(170deg, var(--surface-strong), var(--surface-muted));
+      border: 1px solid var(--line-strong);
+      box-shadow: var(--shadow);
+      animation: float 9s ease-in-out infinite;
     }
-    .device::before { content: ""; position: absolute; top: 17px; left: 50%; z-index: 2; width: 30%; height: 23px; transform: translateX(-50%); border-radius: 99px; background: #090a0c; box-shadow: 0 1px 0 rgba(255,255,255,.12); }
-    .device-screen { overflow: hidden; border-radius: 34px; background: #0d0f12; aspect-ratio: 1320 / 2868; }
-    .device-screen img { width: 100%; height: 100%; object-fit: cover; }
-    .device-glint { position: absolute; top: 5%; right: 8%; width: 28%; height: 58%; border-radius: 99px; transform: rotate(18deg); background: linear-gradient(180deg, rgba(255,255,255,.28), transparent 63%); opacity: .35; pointer-events: none; }
-    .stage-note { position: absolute; right: -1%; bottom: 11%; max-width: 185px; padding: 15px 16px; border-radius: 19px; color: var(--muted); background: var(--surface-strong); border: 1px solid var(--line); box-shadow: var(--shadow-soft); font-size: .78rem; line-height: 1.4; -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); }
-    .stage-note strong { display: block; margin-bottom: 4px; color: var(--ink); font-size: .82rem; }
+    @keyframes float {
+      0%, 100% { transform: translateY(0) rotate(0deg); }
+      50% { transform: translateY(-12px) rotate(-.5deg); }
+    }
+    .device-screen {
+      position: relative;
+      height: 100%;
+      border-radius: 36px;
+      overflow: hidden;
+      background: #0d1116;
+    }
+    .device-screen img {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%;
+      object-fit: cover;
+      opacity: 0;
+      transform: scale(1.04);
+      transition: opacity .75s ease, transform 1.4s ease;
+    }
+    .device-screen img.is-active { opacity: 1; transform: scale(1); }
+    .device-glint {
+      position: absolute; inset: 9px;
+      border-radius: 36px;
+      pointer-events: none;
+      background: linear-gradient(118deg, rgba(255, 255, 255, .34) 8%, transparent 32%, transparent 72%, rgba(255, 255, 255, .16) 96%);
+      mix-blend-mode: screen;
+    }
+    .device-notch {
+      position: absolute; top: 19px; left: 50%;
+      width: 86px; height: 24px;
+      transform: translateX(-50%);
+      border-radius: 999px;
+      background: #0d1116;
+      z-index: 2;
+    }
 
-    .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; overflow: hidden; border-radius: var(--radius); }
-    .metric { min-height: 130px; padding: 25px 26px; background: var(--surface); border-right: 1px solid var(--line); }
-    .metric:last-child { border-right: 0; }
-    .metric strong { display: block; margin-bottom: 5px; font-size: 1.5rem; letter-spacing: -.045em; }
-    .metric span { color: var(--muted); font-size: .83rem; }
+    .stage-note {
+      display: grid; gap: 4px;
+      width: min(100%, 390px);
+      padding: 15px 17px;
+      border-radius: 19px;
+      color: var(--muted); font-size: .86rem;
+    }
+    .stage-note strong { color: var(--ink); font-size: .95rem; }
 
-    .section { padding: 142px 0 0; }
-    .section-head { display: flex; align-items: end; justify-content: space-between; gap: 28px; margin-bottom: 34px; }
+    /* ---------- metrics ---------- */
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 1px;
+      margin-top: 28px;
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    .metric { padding: 26px 24px; background: var(--surface-muted); display: grid; gap: 5px; }
+    .metric strong { font-size: 1.5rem; letter-spacing: -.045em; }
+    .metric span { color: var(--muted); font-size: .85rem; }
+
+    /* ---------- sections ---------- */
+
+    .section { padding: 86px 0 0; }
+    .section-head { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); gap: 32px; align-items: end; margin-bottom: 34px; }
     .section-head h2 { max-width: 640px; margin-bottom: 0; font-size: clamp(2.2rem, 4.3vw, 4rem); line-height: .99; letter-spacing: -.065em; }
-    .section-lede { max-width: 390px; margin-bottom: 4px; color: var(--muted); font-size: .98rem; }
+    .section-head .eyebrow { margin-top: 0; }
+    .section-lede { margin: 0; color: var(--muted); font-size: .99rem; }
 
-    .feature-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-    .feature-card { min-height: 245px; padding: 25px; border-radius: var(--radius); }
-    .feature-index { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; margin-bottom: 38px; border-radius: 11px; color: var(--ink); background: var(--accent-soft); font-size: .75rem; font-weight: 750; }
-    .feature-card h3 { margin-bottom: 9px; font-size: 1.17rem; letter-spacing: -.035em; }
-    .feature-card p { margin-bottom: 0; color: var(--muted); font-size: .9rem; line-height: 1.5; }
+    .release-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 36px; padding: 38px; border-radius: var(--radius); }
+    .release-panel h2 { margin: 10px 0 0; font-size: clamp(1.9rem, 3.1vw, 2.7rem); line-height: 1.02; letter-spacing: -.055em; }
+    .release-panel p { color: var(--muted); }
+    .release-list { display: grid; gap: 11px; align-content: center; }
+    .release-item { display: flex; gap: 12px; padding: 13px 15px; border-radius: 17px; background: var(--surface-muted); border: 1px solid var(--line); font-size: .89rem; }
+    .release-item b { color: var(--green); }
 
-    .workflow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; overflow: hidden; border-radius: var(--radius); }
-    .workflow-step { position: relative; min-height: 224px; padding: 26px 23px; background: var(--surface); border-right: 1px solid var(--line); }
-    .workflow-step:last-child { border-right: 0; }
-    .workflow-step::after { content: "→"; position: absolute; top: 25px; right: 19px; color: var(--faint); font-size: 1.2rem; }
-    .workflow-step:last-child::after { display: none; }
-    .workflow-number { color: var(--faint); font-size: .74rem; font-weight: 750; letter-spacing: .12em; }
-    .workflow-step h3 { margin: 60px 0 8px; font-size: 1.1rem; letter-spacing: -.035em; }
-    .workflow-step p { margin-bottom: 0; color: var(--muted); font-size: .86rem; line-height: 1.45; }
+    .gallery { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+    .gallery-card {
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: transform .4s cubic-bezier(.2, .8, .2, 1), box-shadow .4s ease;
+    }
+    .gallery-card:hover { transform: translateY(-9px) scale(1.012); box-shadow: var(--shadow); }
+    .gallery-card img { width: 100%; aspect-ratio: 9 / 16; object-fit: cover; object-position: top; }
+    .gallery-caption { display: grid; gap: 3px; padding: 17px 19px 21px; }
+    .gallery-caption strong { font-size: .98rem; }
+    .gallery-caption span { color: var(--muted); font-size: .84rem; }
 
-    .gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; align-items: start; }
-    .gallery-card { overflow: hidden; border-radius: var(--radius); }
-    .gallery-card img { width: 100%; aspect-ratio: 1320 / 2868; object-fit: cover; object-position: top; background: #111; }
-    .gallery-caption { padding: 17px 18px 19px; background: var(--surface); border-top: 1px solid var(--line); }
-    .gallery-caption strong { display: block; margin-bottom: 4px; font-size: .97rem; }
-    .gallery-caption span { color: var(--muted); font-size: .81rem; }
+    .feature-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+    .feature-card { position: relative; padding: 27px 25px 29px; border-radius: var(--radius); overflow: hidden; transition: transform .35s ease; }
+    .feature-card:hover { transform: translateY(-6px); }
+    .feature-card::after {
+      content: ""; position: absolute; inset: 0;
+      background: radial-gradient(420px circle at var(--mx, 50%) var(--my, 0%), rgba(145, 178, 215, .22), transparent 62%);
+      opacity: 0; transition: opacity .35s ease; pointer-events: none;
+    }
+    .feature-card:hover::after { opacity: 1; }
+    .feature-index { font-size: .73rem; font-weight: 750; letter-spacing: .16em; color: var(--faint); }
+    .feature-card h3 { margin: 13px 0 7px; font-size: 1.13rem; letter-spacing: -.035em; }
+    .feature-card p { margin: 0; color: var(--muted); font-size: .89rem; }
 
-    .release-panel { display: grid; grid-template-columns: 1fr .9fr; gap: 34px; align-items: center; padding: clamp(28px, 5vw, 58px); border-radius: 34px; background: linear-gradient(135deg, rgba(255,255,255,.72), rgba(221, 229, 239, .52)); }
-    .release-panel h2 { max-width: 550px; margin-bottom: 15px; font-size: clamp(2rem, 4vw, 3.65rem); line-height: 1; letter-spacing: -.06em; }
-    .release-panel p { max-width: 530px; margin-bottom: 0; color: var(--muted); }
-    .release-list { display: grid; gap: 11px; }
-    .release-item { display: grid; grid-template-columns: 24px 1fr; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); font-size: .91rem; }
-    .release-item:last-child { border-bottom: 0; }
-    .release-item b { color: var(--green); font-size: .9rem; }
+    .workflow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; border-radius: var(--radius); overflow: hidden; }
+    .workflow-step { position: relative; padding: 29px 25px 31px; background: var(--surface-muted); }
+    .workflow-step::before {
+      content: ""; position: absolute; left: 0; top: 0; height: 3px; width: 100%;
+      background: linear-gradient(90deg, var(--blue), var(--lavender));
+      transform: scaleX(0); transform-origin: 0 50%;
+      transition: transform .5s ease;
+    }
+    .workflow-step.is-lit::before { transform: scaleX(1); }
+    .workflow-number { font-size: .73rem; font-weight: 750; letter-spacing: .16em; color: var(--faint); }
+    .workflow-step h3 { margin: 12px 0 7px; font-size: 1.1rem; letter-spacing: -.035em; }
+    .workflow-step p { margin: 0; color: var(--muted); font-size: .88rem; }
 
-    .review-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-    .review-card { min-height: 220px; padding: 25px; border-radius: var(--radius); }
-    .review-mark { display: block; margin-bottom: 46px; color: var(--faint); font-size: .75rem; font-weight: 750; letter-spacing: .13em; }
-    .review-card h3 { margin-bottom: 9px; font-size: 1.12rem; }
-    .review-card p { margin-bottom: 0; color: var(--muted); font-size: .9rem; }
+    .review-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+    .review-card { padding: 27px 25px 29px; border-radius: var(--radius); }
+    .review-mark { font-size: .71rem; font-weight: 750; letter-spacing: .15em; color: var(--faint); }
+    .review-card h3 { margin: 13px 0 7px; font-size: 1.1rem; letter-spacing: -.035em; }
+    .review-card p { margin: 0; color: var(--muted); font-size: .89rem; }
 
-    .faq { display: grid; grid-template-columns: .7fr 1.3fr; gap: 70px; align-items: start; }
+    .faq { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: 36px; }
     .faq h2 { margin-bottom: 0; font-size: clamp(2.3rem, 4vw, 3.8rem); line-height: .98; letter-spacing: -.065em; }
-    details { padding: 17px 0; border-bottom: 1px solid var(--line); }
-    summary { cursor: pointer; list-style: none; font-size: 1rem; font-weight: 650; }
-    summary::-webkit-details-marker { display: none; }
-    summary::after { content: "+"; float: right; color: var(--faint); font-size: 1.3rem; font-weight: 400; }
-    details[open] summary::after { content: "−"; }
-    details p { max-width: 620px; margin: 11px 0 3px; color: var(--muted); font-size: .9rem; }
+    .faq details {
+      padding: 17px 19px; border-radius: 19px;
+      background: var(--surface-muted); border: 1px solid var(--line);
+      margin-bottom: 11px;
+    }
+    .faq summary { cursor: pointer; font-weight: 650; list-style: none; display: flex; justify-content: space-between; gap: 16px; }
+    .faq summary::-webkit-details-marker { display: none; }
+    .faq summary::after { content: "+"; color: var(--faint); transition: transform .3s ease; }
+    .faq details[open] summary::after { transform: rotate(45deg); }
+    .faq p { margin: 11px 0 0; color: var(--muted); font-size: .9rem; }
 
-    .final-cta { display: flex; align-items: center; justify-content: space-between; gap: 25px; padding: 32px; border-radius: var(--radius); }
-    .final-cta h2 { margin-bottom: 6px; font-size: 1.6rem; letter-spacing: -.05em; }
-    .final-cta p { margin-bottom: 0; color: var(--muted); font-size: .9rem; }
-    footer { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 58px 0 38px; color: var(--faint); font-size: .82rem; }
-    .footer-links { display: flex; flex-wrap: wrap; gap: 18px; }
-    .footer-links a:hover, .footer-links a:focus-visible { color: var(--ink); }
+    .final-cta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 24px; margin-top: 86px; padding: 40px; border-radius: var(--radius); }
+    .final-cta h2 { margin: 0 0 7px; font-size: clamp(1.8rem, 3vw, 2.6rem); letter-spacing: -.055em; line-height: 1.02; }
+    .final-cta p { margin: 0; color: var(--muted); }
 
-    @media (prefers-reduced-transparency: reduce) {
-      .glass, .pill, .stage-note, .button-secondary, .metric, .workflow-step, .gallery-caption, .review-card, .final-cta { background: var(--surface-strong); -webkit-backdrop-filter: none; backdrop-filter: none; }
+    footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 54px 0 46px; color: var(--faint); font-size: .84rem; }
+    .footer-links { display: flex; flex-wrap: wrap; gap: 19px; }
+    .footer-links a:hover { color: var(--ink); }
+
+    /* ---------- scroll reveal ---------- */
+
+    .reveal { opacity: 0; transform: translateY(26px); transition: opacity .7s cubic-bezier(.2, .8, .2, 1), transform .7s cubic-bezier(.2, .8, .2, 1); }
+    .reveal.is-in { opacity: 1; transform: none; }
+
+    @media (max-width: 980px) {
+      .hero { grid-template-columns: 1fr; padding-top: 54px; }
+      .metrics, .feature-grid, .gallery, .review-grid, .workflow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .release-panel, .section-head, .faq { grid-template-columns: 1fr; }
+      .nav-links > a:not(.nav-cta) { display: none; }
+    }
+
+    @media (max-width: 620px) {
+      .metrics, .feature-grid, .gallery, .review-grid, .workflow { grid-template-columns: 1fr; }
+      .device { width: min(74%, 236px); }
+      .release-panel, .final-cta { padding: 26px; }
+      .final-cta .button { margin-top: 19px; }
+      .footer-links { margin-top: 16px; }
     }
 
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
-      *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
-    }
-
-    @media (max-width: 860px) {
-      .nav-links a:not(.nav-cta) { display: none; }
-      .hero { grid-template-columns: 1fr; padding-top: 74px; }
-      .hero-stage { min-height: 520px; }
-      .device { width: min(74%, 330px); }
-      .feature-grid, .review-grid { grid-template-columns: repeat(2, 1fr); }
-      .workflow { grid-template-columns: repeat(2, 1fr); }
-      .workflow-step:nth-child(2) { border-right: 0; }
-      .workflow-step:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
-      .workflow-step:nth-child(2)::after { display: none; }
-      .release-panel, .faq { grid-template-columns: 1fr; gap: 30px; }
-      .faq { gap: 32px; }
-    }
-
-    @media (max-width: 560px) {
-      .site-shell, .site-nav { width: min(calc(100% - 28px), var(--max)); }
-      .site-nav { top: 10px; margin-top: 10px; }
-      .nav-cta { padding: 8px 11px; font-size: .78rem; }
-      .hero { min-height: auto; padding: 68px 0 54px; }
-      h1 { font-size: clamp(3rem, 16vw, 4.3rem); }
-      .hero-stage { min-height: 440px; }
-      .stage-note { right: -4%; bottom: 5%; }
-      .metrics, .feature-grid, .review-grid, .gallery, .workflow { grid-template-columns: 1fr; }
-      .metric { border-right: 0; border-bottom: 1px solid var(--line); }
-      .metric:last-child { border-bottom: 0; }
-      .feature-card { min-height: 205px; }
-      .feature-index { margin-bottom: 31px; }
-      .workflow-step { min-height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
-      .workflow-step:last-child { border-bottom: 0; }
-      .workflow-step::after { display: none; }
-      .workflow-step h3 { margin-top: 35px; }
-      .gallery-card img { aspect-ratio: 1320 / 2868; }
-      .section { padding-top: 100px; }
-      .section-head { display: block; }
-      .section-lede { margin-top: 15px; }
-      .final-cta, footer { display: block; }
-      .final-cta .button { margin-top: 19px; }
-      .footer-links { margin-top: 16px; }
+      *, *::before, *::after {
+        animation: none !important;
+        transition-duration: .01ms !important;
+      }
+      .reveal { opacity: 1; transform: none; }
+      .device-screen img.is-active { opacity: 1; }
+      h1 .shine { background: none; -webkit-text-fill-color: currentColor; color: inherit; }
     }
   </style>
 </head>
 <body>
+  <div class="aurora" aria-hidden="true"><span></span><span></span><span></span></div>
+
   <nav class="site-nav glass" aria-label="Main navigation">
     <a class="brand" href="./" aria-label="ForgeSign home">
       <img src="./assets/forgesign-icon.png" alt="">
@@ -325,6 +473,7 @@
       <a href="#faq">FAQ</a>
       <a class="nav-cta" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa">Download latest</a>
     </div>
+    <div class="scroll-progress" id="scroll-progress" aria-hidden="true"></div>
   </nav>
 
   <main>
@@ -333,7 +482,7 @@
         <div>
           <div class="pill">Version 2.8 · open source</div>
           <p class="eyebrow">On-device IPA signer</p>
-          <h1 id="hero-title">The calmer way to sign.</h1>
+          <h1 id="hero-title">The calmer <span class="shine">way to sign.</span></h1>
           <p class="hero-copy">ForgeSign brings a focused signing, install, and library workflow to iPhone and iPad. Choose your materials, see what is ready, and keep the pass local.</p>
           <div class="hero-actions">
             <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa">Download latest unsigned IPA <span aria-hidden="true">↗</span></a>
@@ -345,16 +494,36 @@
             <span>Local-first</span>
           </div>
         </div>
-        <div class="hero-stage" aria-label="ForgeSign Library screen preview">
+
+        <div class="hero-stage">
+          <div class="pass-rail glass" role="tablist" aria-label="Walk through the signing pass">
+            <div class="rail-line" aria-hidden="true"><div class="rail-comet" id="rail-comet"></div></div>
+            <button class="rail-step" type="button" role="tab" aria-selected="true" aria-controls="screen-sources" data-step="0">
+              <span class="rail-dot" aria-hidden="true"></span><span class="rail-label">Inspect</span>
+            </button>
+            <button class="rail-step" type="button" role="tab" aria-selected="false" aria-controls="screen-sign" data-step="1">
+              <span class="rail-dot" aria-hidden="true"></span><span class="rail-label">Sign</span>
+            </button>
+            <button class="rail-step" type="button" role="tab" aria-selected="false" aria-controls="screen-library" data-step="2">
+              <span class="rail-dot" aria-hidden="true"></span><span class="rail-label">Install</span>
+            </button>
+          </div>
+
           <div class="device">
-            <div class="device-screen"><img src="./screens/screenshot-library-dark.png" alt="ForgeSign Library screen in dark mode"></div>
+            <div class="device-notch" aria-hidden="true"></div>
+            <div class="device-screen">
+              <img id="screen-sources" class="is-active" src="./screens/screenshot-sources-dark.png" alt="ForgeSign Sources tab in dark mode">
+              <img id="screen-sign" src="./screens/screenshot-sign-dark.png" alt="ForgeSign Sign tab in dark mode">
+              <img id="screen-library" src="./screens/screenshot-library-dark.png" alt="ForgeSign Library tab in dark mode">
+            </div>
             <div class="device-glint" aria-hidden="true"></div>
           </div>
-          <div class="stage-note"><strong>Designed around the pass</strong>Preflight, sign, install, and return to your library without losing the thread.</div>
+
+          <div class="stage-note glass"><strong>Designed around the pass</strong>Preflight, sign, install, and return to your library without losing the thread.</div>
         </div>
       </section>
 
-      <section class="metrics glass" aria-label="ForgeSign highlights">
+      <section class="metrics glass reveal" aria-label="ForgeSign highlights">
         <div class="metric"><strong>On-device</strong><span>Files and signing stay in your workflow.</span></div>
         <div class="metric"><strong>2.8</strong><span>Simpler, more reliable signing and install.</span></div>
         <div class="metric"><strong>16+</strong><span>Built for iPhone and iPad.</span></div>
@@ -362,7 +531,7 @@
       </section>
 
       <section class="section" id="whats-new" aria-labelledby="release-title">
-        <div class="release-panel glass">
+        <div class="release-panel glass reveal">
           <div>
             <p class="eyebrow">Latest release · Version 2.8</p>
             <h2 id="release-title">More reliable, from import to install.</h2>
@@ -380,38 +549,38 @@
       </section>
 
       <section class="section" id="screens" aria-labelledby="screens-title">
-        <div class="section-head">
+        <div class="section-head reveal">
           <div><p class="eyebrow">ForgeSign · Dark-mode review</p><h2 id="screens-title">A closer look at the signing workflow.</h2></div>
           <p class="section-lede">The app stays glassy and legible in dark mode, with the same information hierarchy across each tab.</p>
         </div>
         <div class="gallery">
-          <figure class="gallery-card glass"><img src="./screens/screenshot-sign-dark.png" alt="ForgeSign Sign tab in dark mode" loading="lazy"><figcaption class="gallery-caption"><strong>Sign</strong><span>Keep the core inputs and optional injection in one pass.</span></figcaption></figure>
-          <figure class="gallery-card glass"><img src="./screens/screenshot-sources-dark.png" alt="ForgeSign Sources tab in dark mode" loading="lazy"><figcaption class="gallery-caption"><strong>Sources</strong><span>Save feeds and hand a selected IPA into signing.</span></figcaption></figure>
-          <figure class="gallery-card glass"><img src="./screens/screenshot-library-dark.png" alt="ForgeSign Library tab in dark mode" loading="lazy"><figcaption class="gallery-caption"><strong>Library</strong><span>Return to signed history when the work is done.</span></figcaption></figure>
+          <figure class="gallery-card glass reveal"><img src="./screens/screenshot-sign-dark.png" alt="ForgeSign Sign tab in dark mode" loading="lazy"><figcaption class="gallery-caption"><strong>Sign</strong><span>Keep the core inputs and optional injection in one pass.</span></figcaption></figure>
+          <figure class="gallery-card glass reveal"><img src="./screens/screenshot-sources-dark.png" alt="ForgeSign Sources tab in dark mode" loading="lazy"><figcaption class="gallery-caption"><strong>Sources</strong><span>Save feeds and hand a selected IPA into signing.</span></figcaption></figure>
+          <figure class="gallery-card glass reveal"><img src="./screens/screenshot-library-dark.png" alt="ForgeSign Library tab in dark mode" loading="lazy"><figcaption class="gallery-caption"><strong>Library</strong><span>Return to signed history when the work is done.</span></figcaption></figure>
         </div>
       </section>
 
       <section class="section" id="features" aria-labelledby="features-title">
-        <div class="section-head">
+        <div class="section-head reveal">
           <div><p class="eyebrow">A complete signing pass</p><h2 id="features-title">Small details that remove friction.</h2></div>
           <p class="section-lede">The interface stays quiet until you need a decision, then puts the next useful action in reach.</p>
         </div>
         <div class="feature-grid">
-          <article class="feature-card glass"><span class="feature-index">01</span><h3>Sign on-device</h3><p>Bring an IPA, certificate, and profile to the device. The existing zsign workflow handles the signing pass locally.</p></article>
-          <article class="feature-card glass"><span class="feature-index">02</span><h3>Preflight first</h3><p>See package, bundle, encryption, and architecture signals before committing to a signing run.</p></article>
-          <article class="feature-card glass"><span class="feature-index">03</span><h3>Remembered certificates</h3><p>Keep validated certificate details and optional passwords available for repeat signing without re-entering everything.</p></article>
-          <article class="feature-card glass"><span class="feature-index">04</span><h3>Optional dylib injection</h3><p>Opt in to compatible decrypted Mach-O dylibs, with a separate app-extension toggle, before the normal signer runs.</p></article>
-          <article class="feature-card glass"><span class="feature-index">05</span><h3>Sources that hand off</h3><p>Save repository feeds, inspect available IPAs, and send a selected download into the same signing flow.</p></article>
-          <article class="feature-card glass"><span class="feature-index">06</span><h3>Library and install</h3><p>Keep signed history together with reinstall, share, delete, and the existing semi-local install path.</p></article>
+          <article class="feature-card glass reveal"><span class="feature-index">01</span><h3>Sign on-device</h3><p>Bring an IPA, certificate, and profile to the device. The existing zsign workflow handles the signing pass locally.</p></article>
+          <article class="feature-card glass reveal"><span class="feature-index">02</span><h3>Preflight first</h3><p>See package, bundle, encryption, and architecture signals before committing to a signing run.</p></article>
+          <article class="feature-card glass reveal"><span class="feature-index">03</span><h3>Remembered certificates</h3><p>Keep validated certificate details and optional passwords available for repeat signing without re-entering everything.</p></article>
+          <article class="feature-card glass reveal"><span class="feature-index">04</span><h3>Optional dylib injection</h3><p>Opt in to compatible decrypted Mach-O dylibs, with a separate app-extension toggle, before the normal signer runs.</p></article>
+          <article class="feature-card glass reveal"><span class="feature-index">05</span><h3>Sources that hand off</h3><p>Save repository feeds, inspect available IPAs, and send a selected download into the same signing flow.</p></article>
+          <article class="feature-card glass reveal"><span class="feature-index">06</span><h3>Library and install</h3><p>Keep signed history together with reinstall, share, delete, and the existing semi-local install path.</p></article>
         </div>
       </section>
 
       <section class="section" aria-labelledby="workflow-title">
-        <div class="section-head">
+        <div class="section-head reveal">
           <div><p class="eyebrow">The rhythm</p><h2 id="workflow-title">Inspect. Prepare. Sign. Install.</h2></div>
           <p class="section-lede">Optional tools stay beside the core pass, so the familiar signing route remains familiar.</p>
         </div>
-        <div class="workflow glass">
+        <div class="workflow glass reveal">
           <article class="workflow-step"><span class="workflow-number">01</span><h3>Inspect</h3><p>Choose an IPA and read the preflight signals before signing.</p></article>
           <article class="workflow-step"><span class="workflow-number">02</span><h3>Prepare</h3><p>Add a certificate, profile, and any optional bundle or dylib choices.</p></article>
           <article class="workflow-step"><span class="workflow-number">03</span><h3>Sign</h3><p>Run the on-device signer and save the result to the library.</p></article>
@@ -420,19 +589,19 @@
       </section>
 
       <section class="section" aria-labelledby="review-title">
-        <div class="section-head">
+        <div class="section-head reveal">
           <div><p class="eyebrow">Workflow review</p><h2 id="review-title">What the new screens make obvious.</h2></div>
           <p class="section-lede">A product review of the interaction itself: fewer hidden steps, clearer boundaries, and a library you can return to.</p>
         </div>
         <div class="review-grid">
-          <article class="review-card glass"><span class="review-mark">01 / CLARITY</span><h3>Preflight before commitment</h3><p>The IPA gets a quick read before the signing action, so a missing or unsuitable input is visible earlier.</p></article>
-          <article class="review-card glass"><span class="review-mark">02 / CONTROL</span><h3>Optional means optional</h3><p>Dylib injection and app-extension handling are surfaced as an opt-in layer around the unchanged normal route.</p></article>
-          <article class="review-card glass"><span class="review-mark">03 / CONTINUITY</span><h3>Finish where you started</h3><p>Sources feed the same signer, while Library keeps signed history close for the next install or share.</p></article>
+          <article class="review-card glass reveal"><span class="review-mark">01 / CLARITY</span><h3>Preflight before commitment</h3><p>The IPA gets a quick read before the signing action, so a missing or unsuitable input is visible earlier.</p></article>
+          <article class="review-card glass reveal"><span class="review-mark">02 / CONTROL</span><h3>Optional means optional</h3><p>Dylib injection and app-extension handling are surfaced as an opt-in layer around the unchanged normal route.</p></article>
+          <article class="review-card glass reveal"><span class="review-mark">03 / CONTINUITY</span><h3>Finish where you started</h3><p>Sources feed the same signer, while Library keeps signed history close for the next install or share.</p></article>
         </div>
       </section>
 
       <section class="section" id="faq" aria-labelledby="faq-title">
-        <div class="faq">
+        <div class="faq reveal">
           <div><p class="eyebrow">Questions, answered</p><h2 id="faq-title">Keep the edges clear.</h2></div>
           <div>
             <details open><summary>Is the downloaded IPA signed?</summary><p>No. The release is intentionally unsigned so you can sign it with your own certificate and provisioning profile before installing.</p></details>
@@ -445,7 +614,7 @@
       </section>
 
       <section class="section" aria-label="Download ForgeSign">
-        <div class="final-cta glass">
+        <div class="final-cta glass reveal">
           <div><h2>Ready for a quieter signing pass?</h2><p>Download ForgeSign 2.8 and bring your own signing materials.</p></div>
           <a class="button button-primary" href="https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa">Download latest IPA <span aria-hidden="true">↗</span></a>
         </div>
@@ -457,6 +626,99 @@
       </footer>
     </div>
   </main>
-  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+
+  <script>
+    (function () {
+      document.getElementById('year').textContent = new Date().getFullYear();
+
+      var calm = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+      // Scroll progress in the navigation bar.
+      var progress = document.getElementById('scroll-progress');
+      var ticking = false;
+      function drawProgress() {
+        var max = document.documentElement.scrollHeight - window.innerHeight;
+        progress.style.transform = 'scaleX(' + (max > 0 ? window.scrollY / max : 0) + ')';
+        ticking = false;
+      }
+      window.addEventListener('scroll', function () {
+        if (!ticking) { ticking = true; requestAnimationFrame(drawProgress); }
+      }, { passive: true });
+      drawProgress();
+
+      // Reveal sections as they come into view.
+      var revealables = document.querySelectorAll('.reveal');
+      if (calm.matches || !('IntersectionObserver' in window)) {
+        revealables.forEach(function (node) { node.classList.add('is-in'); });
+      } else {
+        var reveal = new IntersectionObserver(function (entries) {
+          entries.forEach(function (entry) {
+            if (!entry.isIntersecting) return;
+            entry.target.classList.add('is-in');
+            reveal.unobserve(entry.target);
+          });
+        }, { rootMargin: '0px 0px -12% 0px' });
+        revealables.forEach(function (node, index) {
+          node.style.transitionDelay = (index % 3) * 90 + 'ms';
+          reveal.observe(node);
+        });
+      }
+
+      // Light the workflow steps in sequence once the strip is visible.
+      var steps = document.querySelectorAll('.workflow-step');
+      if (calm.matches || !('IntersectionObserver' in window)) {
+        steps.forEach(function (step) { step.classList.add('is-lit'); });
+      } else if (steps.length) {
+        var lighter = new IntersectionObserver(function (entries) {
+          entries.forEach(function (entry) {
+            if (!entry.isIntersecting) return;
+            steps.forEach(function (step, index) {
+              setTimeout(function () { step.classList.add('is-lit'); }, index * 170);
+            });
+            lighter.disconnect();
+          });
+        }, { rootMargin: '0px 0px -20% 0px' });
+        lighter.observe(steps[0].parentNode);
+      }
+
+      // Hero: walk the pass rail and the phone screens together.
+      var rail = document.querySelectorAll('.rail-step');
+      var screens = document.querySelectorAll('.device-screen img');
+      var comet = document.getElementById('rail-comet');
+      var current = 0;
+      var timer = null;
+
+      function show(index) {
+        current = index;
+        rail.forEach(function (step, i) { step.setAttribute('aria-selected', String(i === index)); });
+        screens.forEach(function (screen, i) { screen.classList.toggle('is-active', i === index); });
+        // Centre the 34%-wide comet under the active dot. Dots sit at 0%, 50%
+        // and 100% of the line, and translateX is a share of the comet's width.
+        var along = rail.length > 1 ? (index / (rail.length - 1)) * 100 : 50;
+        comet.style.transform = 'translateX(' + (along - 17) / 0.34 + '%)';
+      }
+
+      function play() {
+        if (calm.matches || rail.length === 0) return;
+        stop();
+        timer = setInterval(function () { show((current + 1) % rail.length); }, 3400);
+      }
+      function stop() { if (timer) { clearInterval(timer); timer = null; } }
+
+      rail.forEach(function (step) {
+        step.addEventListener('click', function () {
+          show(Number(step.dataset.step));
+          play();
+        });
+      });
+
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) { stop(); } else { play(); }
+      });
+
+      show(0);
+      play();
+    })();
+  </script>
 </body>
 </html>
