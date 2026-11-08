@@ -13,23 +13,37 @@ final class SigningService: ObservableObject {
     }
 
     @Published var phase: Phase = .idle
+    @Published private(set) var stagingResetID = 0
+    @Published private(set) var activeInputChecks = 0
+    @Published private(set) var isStaging = false
+    @Published private(set) var copyProgress: TransferProgress?
+    private var activeCopy: FileCopyOperation?
+    private var activeCopyID: UUID?
+
+    var isBusy: Bool { phase == .signing || phase == .provisioning }
+    var canAcceptInput: Bool { !isBusy && !isStaging && activeInputChecks == 0 }
 
     let tempDir: URL
     let workDir: URL
 
-    init() {
-        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    init(workDirectory: URL? = nil) {
+        let base = workDirectory ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ForgeSign", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         workDir = base
         tempDir = base.appendingPathComponent("tmp", isDirectory: true)
         try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        FileCopyOperation.removeAbandonedPartials(in: base)
         // Partial extracts and injected IPA copies never survive a relaunch.
         cleanTemp()
     }
 
     /// Purges the disposable temp folder (partial extracts, injected IPA copies).
+    /// Skipped while an input inspection is reading from tempDir — otherwise a
+    /// sign completing during a newly staged inspection would delete the files
+    /// under it. The leftovers go on the next clean-up or relaunch.
     func cleanTemp() {
+        guard activeInputChecks == 0 else { return }
         if let items = try? FileManager.default.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil) {
             for item in items {
                 try? FileManager.default.removeItem(at: item)
@@ -50,26 +64,70 @@ final class SigningService: ObservableObject {
         }
     }
 
-    /// Copies a security-scoped picked file into the app container, returning the local path.
-    func stage(_ url: URL, as name: String? = nil) -> URL? {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let dest = workDir.appendingPathComponent(name ?? url.lastPathComponent).standardizedFileURL
-        try? FileManager.default.removeItem(at: dest)
-        do {
-            try FileManager.default.copyItem(at: url, to: dest)
-            guard FileManager.default.isReadableFile(atPath: dest.path) else { return nil }
-            return dest
-        } catch {
-            return nil
+    var stagedBytes: Int64 {
+        StorageUsage.bytes(of: StorageUsage.files(in: workDir, extensions: ["ipa", "zip", "dylib"]))
+    }
+
+    var canClearStaging: Bool {
+        canAcceptInput
+    }
+
+    func beginInputCheck() { activeInputChecks += 1 }
+    func endInputCheck() { activeInputChecks = max(0, activeInputChecks - 1) }
+
+    /// Discards the currently staged input and optional injected library.
+    /// The Sign view observes stagingResetID and drops its stale URLs.
+    @discardableResult
+    func clearStaging() -> (removed: Int, failed: Int) {
+        guard canClearStaging else { return (0, 0) }
+        var removed = 0
+        var failed = 0
+        for url in StorageUsage.files(in: workDir, extensions: ["ipa", "zip", "dylib"]) {
+            do {
+                try FileManager.default.removeItem(at: url)
+                removed += 1
+            } catch {
+                failed += 1
+            }
         }
+        if removed > 0 { stagingResetID += 1 }
+        return (removed, failed)
+    }
+
+    func cancelInputCopy() { activeCopy?.cancel() }
+
+    /// Copies off the main actor while retaining the scoped access grant.
+    func stage(_ url: URL, as name: String? = nil) async throws -> URL {
+        guard canAcceptInput else { throw FileCopyOperation.Failure.busy }
+        let destination = workDir.appendingPathComponent(name ?? url.lastPathComponent).standardizedFileURL
+        guard destination.deletingLastPathComponent().resolvingSymlinksInPath() == workDir.resolvingSymlinksInPath(),
+              destination != workDir.standardizedFileURL else { throw FileCopyOperation.Failure.invalidDestination }
+        let id = UUID()
+        let operation = FileCopyOperation { [weak self] progress in
+            Task { @MainActor in
+                guard let self, self.activeCopyID == id else { return }
+                self.copyProgress = progress
+            }
+        }
+        activeCopy = operation
+        activeCopyID = id
+        isStaging = true
+        copyProgress = nil
+        defer {
+            activeCopy = nil
+            activeCopyID = nil
+            isStaging = false
+            copyProgress = nil
+        }
+        return try await operation.copy(from: url, to: destination)
     }
 
     /// Runs the zsign signing engine. Blocking — call from a background task.
     /// Returns success, a message, the signed bundle identifier, and version.
     nonisolated static func sign(ipa: URL, p12: URL, password: String, profiles: [URL],
                       bundleId: String, output: URL, tempDir: URL,
-                      removeExtensions: Bool, enableDocuments: Bool)
+                      removeExtensions: Bool, enableDocuments: Bool,
+                      matchAppEntitlements: Bool = false)
         -> (ok: Bool, message: String, signedBundleId: String, signedVersion: String) {
         #if !FORGE_BRIDGE
         // UI-preview builds (e.g. the simulator target) omit the zsign engine.
@@ -86,6 +144,7 @@ final class SigningService: ObservableObject {
             tempDir.path,
             removeExtensions ? 1 : 0,
             enableDocuments ? 1 : 0,
+            matchAppEntitlements ? 1 : 0,
             &msgBuf, Int32(msgBuf.count),
             &bidBuf, Int32(bidBuf.count),
             &verBuf, Int32(verBuf.count)

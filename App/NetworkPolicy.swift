@@ -7,11 +7,7 @@ enum NetworkPolicy {
                         willPerformHTTPRedirection response: HTTPURLResponse,
                         newRequest request: URLRequest,
                         completionHandler: @escaping (URLRequest?) -> Void) {
-            guard let url = request.url, validateHTTPS(url) else {
-                completionHandler(nil)
-                return
-            }
-            completionHandler(request)
+            completionHandler(validatedRedirect(request))
         }
     }
 
@@ -19,6 +15,11 @@ enum NetworkPolicy {
         URLSession(configuration: .ephemeral,
                    delegate: HTTPSRedirectValidator(),
                    delegateQueue: nil)
+    }
+
+    static func validatedRedirect(_ request: URLRequest) -> URLRequest? {
+        guard let url = request.url, validateHTTPS(url) else { return nil }
+        return request
     }
 
     static func validateHTTPS(_ url: URL) -> Bool {
@@ -36,15 +37,17 @@ enum NetworkPolicy {
         guard let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
               let root = plist as? [String: Any],
               let items = root["items"] as? [[String: Any]],
+              items.count == 1,
               let first = items.first,
               let assets = first["assets"] as? [[String: Any]],
+              assets.filter({ ($0["kind"] as? String) == "software-package" }).count == 1,
               let package = assets.first(where: { ($0["kind"] as? String) == "software-package" }),
               let url = package["url"] as? String,
               url == packageURL else { return false }
         guard let metadata = first["metadata"] as? [String: Any] else { return false }
         guard (metadata["bundle-identifier"] as? String) == bundleID else { return false }
-        if !version.isEmpty, let manifestVersion = metadata["bundle-version"] as? String {
-            return manifestVersion == version
+        if !version.isEmpty {
+            return (metadata["bundle-version"] as? String) == version
         }
         return true
     }

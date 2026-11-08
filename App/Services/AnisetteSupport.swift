@@ -204,11 +204,16 @@ enum OnDeviceAnisette {
 }
 
 enum AnisetteHTTPClient {
+    /// Ephemeral and cache-free: anisette responses carry one-time passwords,
+    /// so a cached answer (or the shared cookie store) is never acceptable.
+    private static let session = URLSession(configuration: .ephemeral)
+
     static func fetch(from url: URL, clientDescription: String? = nil) async throws -> [String: String] {
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await session.data(for: request)
 
         guard let http = response as? HTTPURLResponse else {
             throw AltServerClientError.invalidResponse

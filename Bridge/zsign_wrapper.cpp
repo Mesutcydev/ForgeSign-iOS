@@ -247,6 +247,7 @@ static int FS_SignIPA(const char* ipaPath,
                       const char* tempFolder,
                       int removeExtensions,
                       int enableDocuments,
+                      int matchAppEntitlements,
                       char* msgBuf,
                       int msgBufLen,
                       char* bundleIdBuf,
@@ -307,6 +308,7 @@ static int FS_SignIPA(const char* ipaPath,
             return 10;
         }
         FSSanitizeICloudEntitlements(signAssets.back().m_strEntitleData);
+        signAssets.back().m_bMatchAppEntitlements = (matchAppEntitlements != 0);
         if (end == strProfiles.size()) break;
         start = end + 1;
     }
@@ -404,7 +406,7 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
                                    int versionBufLen)
 {
     return FS_SignIPA(ipaPath, p12Path, password, provPath, bundleId, outputPath, tempFolder,
-                      removeExtensions, enableDocuments, msgBuf, msgBufLen,
+                      removeExtensions, enableDocuments, 0, msgBuf, msgBufLen,
                       bundleIdBuf, bundleIdBufLen, versionBuf, versionBufLen);
 }
 
@@ -417,6 +419,7 @@ extern "C" int forgesign_sign_ipa_profiles(const char* ipaPath,
                                             const char* tempFolder,
                                             int removeExtensions,
                                             int enableDocuments,
+                                            int matchAppEntitlements,
                                             char* msgBuf,
                                             int msgBufLen,
                                             char* bundleIdBuf,
@@ -425,7 +428,7 @@ extern "C" int forgesign_sign_ipa_profiles(const char* ipaPath,
                                             int versionBufLen)
 {
     return FS_SignIPA(ipaPath, p12Path, password, profilePaths, bundleId, outputPath, tempFolder,
-                      removeExtensions, enableDocuments, msgBuf, msgBufLen,
+                      removeExtensions, enableDocuments, matchAppEntitlements, msgBuf, msgBufLen,
                       bundleIdBuf, bundleIdBufLen, versionBuf, versionBufLen);
 }
 

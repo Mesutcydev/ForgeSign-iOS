@@ -2,25 +2,41 @@ name: ForgeSign iOS
 
 on:
   push:
-    branches: [main]
-    # Pushing a version tag (e.g. v2.7) also publishes the GitHub release.
+    branches: [main, 'release/**']
+    # A version tag (e.g. v2.8.2) also publishes the validated IPA.
     tags: ['v*']
   pull_request:
-  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   validate:
     runs-on: macos-26
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the tag matches the app version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
+          if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Info.plist version $VERSION"
+            exit 1
+          fi
 
       - name: Show Xcode toolchain
         run: xcodebuild -version
 
-      - name: Install XcodeGen
-        run: brew install xcodegen
+      - name: Install build and native test dependencies
+        run: brew install xcodegen openssl@3
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Prepare checksum-pinned signing dependencies
+        run: python3 scripts/prepare_dependencies.py
 
       - name: Generate project
         run: xcodegen generate
@@ -30,6 +46,12 @@ jobs:
 
       - name: Test IPA packaging
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
+      - name: Test native signing invariants
+        run: |
+          bash scripts/test_signer_identity.sh
+          bash scripts/test_signer_resources.sh
+          bash scripts/test_crypto.sh
 
       - name: Select available simulator
         run: |
@@ -43,6 +65,7 @@ jobs:
             -project ForgeSignMobile.xcodeproj \
             -scheme ForgeSignMobileTests \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO
 
@@ -71,45 +94,40 @@ jobs:
           unzip -Z1 build/ForgeSign-latest.ipa | grep -Fx 'Payload/ForgeSign.app/ForgeSign'
           ! unzip -Z1 build/ForgeSign-latest.ipa | grep -E '\.(debug\.dylib|preview\.dylib)$'
 
-      - name: Name the IPA after its version
-        id: version
-        run: |
-          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
-          test -n "$VERSION"
-          cp build/ForgeSign-latest.ipa "build/ForgeSign-$VERSION.ipa"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-
-      # Every run keeps the unsigned IPA it built, so a PR or manual run can be
-      # downloaded from the run's Artifacts section and signed for testing.
-      - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v4
+      - name: Upload validated unsigned IPA
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ForgeSign-${{ steps.version.outputs.version }}-unsigned-ipa
-          path: build/ForgeSign-${{ steps.version.outputs.version }}.ipa
+          name: ForgeSign-latest
+          path: build/ForgeSign-latest.ipa
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 14
 
+  # Publishes the IPA this run validated. Creates the release for the tag, or
+  # replaces its assets when the release was already drafted by hand.
   release:
     needs: validate
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: ForgeSign-${{ needs.validate.outputs.version }}-unsigned-ipa
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Publish GitHub release
+      - name: Publish the validated IPA
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.validate.outputs.version }}
+          GH_REPO: ${{ github.repository }}
         run: |
-          if [ "$GITHUB_REF_NAME" != "v$VERSION" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match Info.plist version $VERSION"
-            exit 1
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh run download "$GITHUB_RUN_ID" --name ForgeSign-latest --dir release
+          test -f release/ForgeSign-latest.ipa
+          cp release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa"
+          (cd release && shasum -a 256 ForgeSign-latest.ipa "ForgeSign-$VERSION.ipa" > SHA256SUMS.txt)
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa" release/SHA256SUMS.txt --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa" release/SHA256SUMS.txt \
+              --title "ForgeSign $VERSION" \
+              --notes-file WHATS_NEW.md
           fi
-          gh release create "$GITHUB_REF_NAME" "ForgeSign-$VERSION.ipa" \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "ForgeSign $VERSION" \
-            --notes "Unsigned IPA — sign it with your own certificate and provisioning profile before installing. Changes: see “What’s new in $VERSION” in README.md."

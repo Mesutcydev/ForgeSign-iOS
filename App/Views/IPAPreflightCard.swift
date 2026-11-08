@@ -1,13 +1,11 @@
 import SwiftUI
 
-/// Read-only IPA diagnostics. This card intentionally reports findings without
-/// disabling or changing the existing Sign button.
+/// IPA diagnostics and the per-bundle profile plan used by the signer.
 struct IPAPreflightCard: View {
     let state: IPAPreflightState
     let certificate: CertificateRecord?
     let profile: ProfileRecord?
     let audit: ProvisioningAudit?
-    let manualSigningAvailable: Bool
 
     @Environment(\.forgeTheme) private var T
 
@@ -54,8 +52,8 @@ struct IPAPreflightCard: View {
                             .foregroundColor(T.ink3)
                     }
                     Spacer(minLength: 8)
-                    GlassStatusPill(text: auditStatusText,
-                                    color: auditStatusColor)
+                    GlassStatusPill(text: inspection.encryptedExecutableCount > 0 ? "encrypted" : auditStatusText,
+                                    color: inspection.encryptedExecutableCount > 0 ? T.bad : auditStatusColor)
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 14)
@@ -104,8 +102,7 @@ struct IPAPreflightCard: View {
 
                 if let audit {
                     GlassRowDivider()
-                    ProvisioningAuditRows(rows: audit.rows,
-                                          manualFallback: manualSigningAvailable)
+                    ProvisioningAuditRows(rows: audit.rows)
                 }
 
                 MonoText(text: audit == nil
@@ -120,20 +117,13 @@ struct IPAPreflightCard: View {
     }
 
     private var auditStatusText: String {
-        guard audit?.isReady == false else { return "ready" }
-        return rootManualFallbackAvailable ? "manual fallback" : "action needed"
+        guard let audit else { return "checking" }
+        return audit.isReady ? "ready" : "action needed"
     }
 
     private var auditStatusColor: Color {
-        guard audit?.isReady == false else { return T.good }
-        return rootManualFallbackAvailable ? T.warn : T.bad
-    }
-
-    private var rootManualFallbackAvailable: Bool {
-        guard manualSigningAvailable, let audit else { return false }
-        return audit.rows.filter(\.state.isBlocking).allSatisfy {
-            $0.kind == .app && $0.state == .missingProfile
-        }
+        guard let audit else { return T.ink3 }
+        return audit.isReady ? T.good : T.bad
     }
 
     private func valueRow(_ label: String, _ value: String) -> some View {
@@ -184,7 +174,7 @@ struct IPAPreflightCard: View {
               !profileTeam.isEmpty,
               certificateTeam.caseInsensitiveCompare(profileTeam) != .orderedSame
         else { return nil }
-        return "Certificate \(certificateTeam) · profile \(profileTeam). The current signing flow is unchanged."
+        return "Certificate \(certificateTeam) · profile \(profileTeam). Choose profiles that match the signing certificate."
     }
 
     private func encryptedDetail(for inspection: IPAPreflight) -> String {
@@ -198,12 +188,11 @@ struct IPAPreflightCard: View {
 
 private struct ProvisioningAuditRows: View {
     let rows: [ProvisioningAuditRow]
-    let manualFallback: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach(rows) { row in
-                ProvisioningAuditRowView(row: row, manualFallback: manualFallback)
+                ProvisioningAuditRowView(row: row)
                 if row.id != rows.last?.id {
                     GlassRowDivider()
                 }
@@ -214,7 +203,6 @@ private struct ProvisioningAuditRows: View {
 
 private struct ProvisioningAuditRowView: View {
     let row: ProvisioningAuditRow
-    let manualFallback: Bool
 
     @Environment(\.forgeTheme) private var T
 
@@ -237,7 +225,7 @@ private struct ProvisioningAuditRowView: View {
                     .foregroundColor(T.ink2)
                     .lineLimit(2)
                     .truncationMode(.middle)
-                Text(detailText)
+                Text(row.detail)
                     .font(T.mono(9))
                     .foregroundColor(T.ink3)
                     .fixedSize(horizontal: false, vertical: true)
@@ -263,9 +251,6 @@ private struct ProvisioningAuditRowView: View {
     }
 
     private var color: Color {
-        if manualFallback && row.kind == .app && row.state == .missingProfile {
-            return T.warn
-        }
         switch row.state {
         case .ready: return T.good
         case .warning, .removed: return T.warn
@@ -274,9 +259,6 @@ private struct ProvisioningAuditRowView: View {
     }
 
     private var statusText: String {
-        if manualFallback && row.kind == .app && row.state == .missingProfile {
-            return "manual fallback"
-        }
         switch row.state {
         case .ready: return "ready"
         case .warning: return "check device"
@@ -290,10 +272,4 @@ private struct ProvisioningAuditRowView: View {
         }
     }
 
-    private var detailText: String {
-        if manualFallback && row.kind == .app && row.state == .missingProfile {
-            return "No exact application-ID match; the selected imported profile will be supplied to manual signing."
-        }
-        return row.detail
-    }
 }

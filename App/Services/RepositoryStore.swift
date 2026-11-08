@@ -35,7 +35,7 @@ struct RepoSource: Decodable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         name = try? c.decodeIfPresent(String.self, forKey: .name)
         identifier = try? c.decodeIfPresent(String.self, forKey: .identifier)
-        iconURL = LenientDecode.url(c, .iconURL)
+        iconURL = LenientDecode.httpsIconURL(c, .iconURL)
         // Skip individual bad entries instead of nuking the entire list.
         let raw = (try? c.decode([FailableApp].self, forKey: .apps)) ?? []
         apps = raw.compactMap(\.value)
@@ -106,7 +106,7 @@ struct RepoApp: Decodable, Identifiable, Equatable {
         bundleIdentifier = (try? c.decodeIfPresent(String.self, forKey: .bundleIdentifier)) ?? ""
         developerName = try? c.decodeIfPresent(String.self, forKey: .developerName)
         localizedDescription = try? c.decodeIfPresent(String.self, forKey: .localizedDescription)
-        iconURL = LenientDecode.url(c, .iconURL)
+        iconURL = LenientDecode.httpsIconURL(c, .iconURL)
 
         let flatVersion = try? c.decodeIfPresent(String.self, forKey: .version)
         let flatURL = LenientDecode.url(c, .downloadURL)
@@ -135,6 +135,12 @@ private enum LenientDecode {
         guard let s = try? c.decodeIfPresent(String.self, forKey: key) else { return nil }
         return URL(string: s)
     }
+    /// Icon URLs go straight into AsyncImage, so only remote HTTPS is allowed:
+    /// a malicious repo must not make the app fetch http:// or file:// URLs.
+    static func httpsIconURL<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) -> URL? {
+        guard let url = url(c, key), NetworkPolicy.validateHTTPS(url) else { return nil }
+        return url
+    }
     static func int64<K: CodingKey>(_ c: KeyedDecodingContainer<K>, _ key: K) -> Int64? {
         if let n = try? c.decodeIfPresent(Int64.self, forKey: key) { return n }
         if let s = try? c.decodeIfPresent(String.self, forKey: key) { return Int64(s) }
@@ -159,6 +165,9 @@ final class RepositoryStore: ObservableObject {
     /// Identity of the app currently downloading, if any.
     @Published var activeDownloadID: UUID?
     @Published var downloadError: String?
+    @Published private(set) var downloadProgress: TransferProgress?
+    @Published private(set) var downloadName = ""
+    private var downloadTransfer: BoundedTransfer?
 
     /// Last successful catalog fetch per repository (drives the "updated" label).
     @Published private(set) var catalogFetchedAt: [UUID: Date] = [:]
@@ -168,6 +177,28 @@ final class RepositoryStore: ObservableObject {
 
     private let indexURL: URL
     private let downloadsDir: URL
+
+    var downloadedBytes: Int64 {
+        StorageUsage.bytes(of: StorageUsage.files(in: downloadsDir, extensions: ["ipa", "partial"]))
+    }
+
+    /// The Sign tab stages its own copy before consuming pendingIPA.
+    /// Refuse cleanup while that handoff or a download is in flight.
+    @discardableResult
+    func clearDownloads() -> (removed: Int, failed: Int) {
+        guard activeDownloadID == nil, pendingIPA == nil else { return (0, 0) }
+        var removed = 0
+        var failed = 0
+        for url in StorageUsage.files(in: downloadsDir, extensions: ["ipa", "partial"]) {
+            do {
+                try FileManager.default.removeItem(at: url)
+                removed += 1
+            } catch {
+                failed += 1
+            }
+        }
+        return (removed, failed)
+    }
 
     private enum NetworkError: LocalizedError {
         case invalidResponse
@@ -187,11 +218,16 @@ final class RepositoryStore: ObservableObject {
 
     private struct Index: Codable { var repositories: [Repository] = [] }
 
-    init() {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    init(baseDirectory: URL? = nil) {
+        let base = baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         indexURL = base.appendingPathComponent("repositories.json")
         downloadsDir = base.appendingPathComponent("Downloads", isDirectory: true)
         try? FileManager.default.createDirectory(at: downloadsDir, withIntermediateDirectories: true)
+        // A foreground transfer cannot survive relaunch; keep completed IPAs.
+        for file in StorageUsage.files(in: downloadsDir, extensions: ["partial"])
+        where file.lastPathComponent.hasPrefix(".download-") {
+            try? FileManager.default.removeItem(at: file)
+        }
         load()
         #if DEBUG
         RepoSource._selfTest()
@@ -204,7 +240,7 @@ final class RepositoryStore: ObservableObject {
         case invalidURL, duplicate
         var errorDescription: String? {
             switch self {
-            case .invalidURL: return "Enter a valid http(s) repository URL."
+            case .invalidURL: return "Enter a valid HTTPS repository URL."
             case .duplicate: return "That repository is already added."
             }
         }
@@ -270,45 +306,51 @@ final class RepositoryStore: ObservableObject {
         }
     }
 
+    func cancelDownload() {
+        downloadTransfer?.cancel()
+    }
+
     func download(_ app: RepoApp) async {
+        guard activeDownloadID == nil, pendingIPA == nil else { return }
         guard let url = app.downloadURL, NetworkPolicy.validateHTTPS(url) else {
             downloadError = "This app has no safe HTTPS download URL."
             return
         }
-        activeDownloadID = app.id
+        let id = app.id
+        activeDownloadID = id
+        downloadName = app.name
         downloadError = nil
-        defer { if activeDownloadID == app.id { activeDownloadID = nil } }
+        downloadProgress = TransferProgress(receivedBytes: 0, totalBytes: app.size)
+        let partial = downloadsDir.appendingPathComponent(".download-\(UUID().uuidString).partial")
+        let transfer = BoundedTransfer(destination: partial, maximumBytes: 2 * 1_024 * 1_024 * 1_024,
+                                       expectedBytes: app.size) { [weak self] progress in
+            Task { @MainActor in
+                guard let self, self.activeDownloadID == id else { return }
+                self.downloadProgress = progress
+            }
+        }
+        downloadTransfer = transfer
+        defer {
+            if activeDownloadID == id {
+                activeDownloadID = nil
+                downloadTransfer = nil
+                downloadProgress = nil
+                downloadName = ""
+            }
+        }
         do {
-            let session = NetworkPolicy.makeValidatedSession()
-            defer { session.invalidateAndCancel() }
-            let (tempURL, resp) = try await session.download(from: url)
-            // The async download API does not delete its file; without this
-            // every rejected download leaves up to 2 GB in tmp.
-            defer { try? FileManager.default.removeItem(at: tempURL) }
-            guard let http = resp as? HTTPURLResponse,
-                  (200...299).contains(http.statusCode),
-                  let finalURL = resp.url,
-                  NetworkPolicy.validateHTTPS(finalURL) else {
-                downloadError = "Download failed — the server returned an error."
-                return
-            }
-            let values = try tempURL.resourceValues(forKeys: [.fileSizeKey])
-            let size = Int64(values.fileSize ?? 0)
-            let maximum: Int64 = 2 * 1024 * 1024 * 1024
-            guard size > 0, size <= maximum, app.size == nil || app.size == size else {
-                downloadError = "Download size did not match the catalog or exceeded the safe limit."
-                return
-            }
-            let dest = downloadsDir.appendingPathComponent(Self.ipaName(for: app))
-            let replacement = dest.deletingLastPathComponent()
-                .appendingPathComponent(".\(dest.lastPathComponent).\(UUID().uuidString).partial")
-            try FileManager.default.moveItem(at: tempURL, to: replacement)
-            if FileManager.default.fileExists(atPath: dest.path) {
-                _ = try FileManager.default.replaceItemAt(dest, withItemAt: replacement)
+            let downloaded = try await transfer.download(from: url)
+            defer { try? FileManager.default.removeItem(at: downloaded) }
+            try Task.checkCancellation()
+            let destination = downloadsDir.appendingPathComponent(Self.ipaName(for: app))
+            if FileManager.default.fileExists(atPath: destination.path) {
+                _ = try FileManager.default.replaceItemAt(destination, withItemAt: downloaded)
             } else {
-                try FileManager.default.moveItem(at: replacement, to: dest)
+                try FileManager.default.moveItem(at: downloaded, to: destination)
             }
-            pendingIPA = dest
+            pendingIPA = destination
+        } catch is CancellationError {
+            // The cancelled partial is removed by the transfer; GET is available again.
         } catch {
             downloadError = error.localizedDescription
         }
@@ -341,13 +383,18 @@ final class RepositoryStore: ObservableObject {
     }
 
     /// A safe on-disk filename like `AppName-1.2.3.ipa`.
-    private static func ipaName(for app: RepoApp) -> String {
-        let base = app.name.isEmpty ? app.id.uuidString : app.name
-        let unsafe = CharacterSet(charactersIn: "/\\:")
-        let stem = base.components(separatedBy: unsafe).joined(separator: "-")
-        // Feed versions are untrusted too ("1.0/beta" would break the move).
-        let version = app.version.map { "-" + $0.components(separatedBy: unsafe).joined(separator: "-") } ?? ""
-        return "\(stem)\(version).ipa"
+    static func ipaName(for app: RepoApp) -> String {
+        let label = app.name + (app.version.map { "-\($0)" } ?? "")
+        let forbidden = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:"))
+        var stem = ""
+        // Both fields are untrusted. Keep the result a single component and
+        // below the filesystem's byte limit, including multibyte app names.
+        for scalar in label.unicodeScalars {
+            let part = forbidden.contains(scalar) ? "-" : String(scalar)
+            guard stem.utf8.count + part.utf8.count <= 180 else { break }
+            stem += part
+        }
+        return "\(stem.isEmpty ? app.id.uuidString : stem).ipa"
     }
 
     // MARK: Persistence

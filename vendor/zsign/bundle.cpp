@@ -223,7 +223,6 @@ bool ZBundle::GenerateCodeResources(const string& strFolder, jvalue& jvCodeRes)
 		string strFile = strFolder + "/" + strKey;
 		string strSHA1Base64;
 		string strSHA256Base64;
-		// Upstream zsign #413: never seal an unreadable file as if it were empty.
 		if (!ZSHA::SHABase64File(strFile.c_str(), strSHA1Base64, strSHA256Base64)) {
 			ZLog::ErrorV(">>> Can't get file SHASum! %s\n", strFile.c_str());
 			return false;

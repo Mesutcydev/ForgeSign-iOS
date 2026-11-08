@@ -2,6 +2,8 @@
 #include "json.h"
 #include "archo.h"
 #include "signing.h"
+#include "forgesign_identity.h"
+#include "forgesign_entitlements.h"
 
 // ForgeSign: expand a wildcard application-identifier ("<PREFIX>.*") to the
 // concrete bundle id before it is baked into the code signature. A literal
@@ -33,16 +35,7 @@ static string FSExpandWildcardAppId(const string& strEntitleData,
 			continue;
 		}
 		string strValue = jvEntitlements[szKey].as_string();
-		string strConcrete = strValue;
-		if (strValue == "*") {
-			if (!strTeamId.empty()) {
-				strConcrete = strTeamId + "." + strBundleId;
-			}
-		} else if (strValue.size() >= 2 && strValue.compare(strValue.size() - 2, 2, ".*") == 0) {
-			// Keep the existing "<prefix>." (team id or a legacy app-id prefix)
-			// and swap only the trailing "*" for the concrete bundle id.
-			strConcrete = strValue.substr(0, strValue.size() - 1) + strBundleId;
-		}
+		string strConcrete = FSConcreteApplicationIdentifier(strValue, strBundleId, strTeamId);
 		if (strConcrete != strValue) {
 			jvEntitlements[szKey] = strConcrete;
 			bChanged = true;
@@ -400,8 +393,14 @@ bool ZArchO::BuildCodeSignature(ZSignAsset* pSignAsset,
 	// Expand a wildcard application-identifier to this node's concrete bundle id
 	// so the signed app carries a real identity (the Files picker cannot grant
 	// file access to a "*" identity). No-op for concrete profiles.
+	string strProfileEntitlements = pSignAsset->m_strEntitleData;
+	if (IsExecute() && pSignAsset->m_bMatchAppEntitlements && NULL != m_pSignBase) {
+		string strAppEntitlements;
+		ZSign::GetCodeSignatureEntitlements(m_pSignBase, m_uSignLength, strAppEntitlements);
+		strProfileEntitlements = FSMatchAppEntitlements(strProfileEntitlements, strAppEntitlements, pSignAsset->m_strTeamId);
+	}
 	string strEntitlements = IsExecute()
-		? FSExpandWildcardAppId(pSignAsset->m_strEntitleData, strBundleId, pSignAsset->m_strTeamId)
+		? FSExpandWildcardAppId(strProfileEntitlements, strBundleId, pSignAsset->m_strTeamId)
 		: strEmptyEntitlements;
 	ZSign::SlotBuildRequirements(strBundleId, pSignAsset->m_strSubjectCN, strRequirementsSlot);
 	ZSign::SlotBuildEntitlements(strEntitlements, strEntitlementsSlot);

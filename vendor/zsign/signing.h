@@ -43,6 +43,7 @@ public:
 													uint8_t*& pCodeSlots256Data,
 													uint32_t& uCodeSlots256DataLength);
 	static uint32_t GetCodeSignatureLength(uint8_t* pCSBase);
+	static bool GetCodeSignatureEntitlements(uint8_t* pCSBase, uint32_t uCSLength, string& strEntitlements);
 
 	static string _DER(const jvalue& data);
 	static void _DERLength(string& strBlob, uint64_t uLength);

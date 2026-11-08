@@ -133,23 +133,28 @@ bool ZFile::ReadFile(const char* szFile, string& strData)
 	FILE* fp = NULL;
 	_fopen64(fp, szFile, "rb");
 	if (NULL != fp) {
-		_fseeki64(fp, 0, SEEK_END);
-		int64_t to_read = _ftelli64(fp);
-		_fseeki64(fp, 0, SEEK_SET);
-		to_read = (to_read > 0 ? to_read : 0);
-		strData.resize((size_t)to_read);
-		if (strData.capacity() >= (size_t)to_read) {
-			int64_t readed = 0;
-			while (readed < to_read) {
-				size_t ret = fread(&(strData[(size_t)readed]), 1, (size_t)(to_read - readed), fp);
-				if (ret <= 0) {
-					break;
-				}
-				readed += ret;
-			}
+		if (_fseeki64(fp, 0, SEEK_END) != 0) {
+			fclose(fp);
+			return false;
 		}
-		fclose(fp);
-		return (strData.size() == to_read);
+		int64_t to_read = _ftelli64(fp);
+		if (to_read < 0 || _fseeki64(fp, 0, SEEK_SET) != 0) {
+			fclose(fp);
+			return false;
+		}
+		strData.resize((size_t)to_read);
+		int64_t readed = 0;
+		while (readed < to_read) {
+			size_t ret = fread(&(strData[(size_t)readed]), 1, (size_t)(to_read - readed), fp);
+			if (ret == 0) {
+				break;
+			}
+			readed += ret;
+		}
+		bool success = readed == to_read && ferror(fp) == 0;
+		if (fclose(fp) != 0) success = false;
+		if (!success) strData.clear();
+		return success;
 	}
 	return false;
 }

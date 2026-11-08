@@ -1,0 +1,106 @@
+--- a/Package.swift
++++ b/Package.swift
+@@ -7,10 +7,11 @@
+ let package = Package(
+     name: "AltSign",
+     platforms: [
+-        .iOS(.v14),
+-        .macOS(.v11),
++        .iOS("16.0"),
++        .macOS("15.0"),
+     ],
+     products: [
++        .library(name: "OpenSSL", targets: ["OpenSSL"]),
+         .library(
+             name: "AltSign-Dynamic",
+             type: .dynamic,
+@@ -30,6 +31,7 @@
+         
+         .target(
+             name: "ldid-core",
++            dependencies: ["OpenSSL"],
+             path: "Dependencies/ldid",
+             exclude: [
+                 "ldid.hpp",
+@@ -86,7 +88,7 @@
+         ),
+         .target(
+             name: "ldid",
+-            dependencies: ["ldid-core"],
++            dependencies: ["ldid-core", "OpenSSL"],
+             path: "AltSign/ldid",
+             exclude: [
+                 "alt_ldid.hpp",
+@@ -135,7 +137,7 @@
+ 
+         .target(
+             name: "CAltSign",
+-            dependencies: ["CoreCrypto", "ldid"],
++            dependencies: ["CoreCrypto", "ldid", "OpenSSL"],
+             path: "",
+             exclude: [
+                 "AltSign/ldid/alt_ldid.cpp",
+@@ -152,7 +154,12 @@
+             ],
+             publicHeadersPath: "AltSign/include",
+             cSettings: [
+-                .headerSearchPath("AltSign/**"),
++                .headerSearchPath("AltSign/include"),
++                .headerSearchPath("AltSign/include/AltSign"),
++                .headerSearchPath("AltSign/Model"),
++                .headerSearchPath("AltSign/Apple API"),
++                .headerSearchPath("AltSign/Signing"),
++                .headerSearchPath("AltSign/Categories"),
+                 .headerSearchPath("AltSign/ldid"),
+                 .headerSearchPath("Dependencies/minizip"),
+                 .headerSearchPath("AltSign/Capabilities"),
+--- a/AltSign/Model/Apple API/ALTCertificate.m
++++ b/AltSign/Model/Apple API/ALTCertificate.m
+@@ -87,20 +87,29 @@
+     BIO_free(inputP12Buffer);
+     
+     // Extract key + certificate from .p12.
+-    EVP_PKEY *key;
+-    X509 *certificate;
+-    PKCS12_parse(inputP12, password.UTF8String, &key, &certificate, NULL);
+-    
+-    if (key == nil || certificate == nil)
+-    {
++    EVP_PKEY *key = NULL;
++    X509 *certificate = NULL;
++    int parsed = inputP12 ? PKCS12_parse(inputP12, password.UTF8String ?: "", &key, &certificate, NULL) : 0;
++    PKCS12_free(inputP12);
++    
++    if (parsed != 1 || key == NULL || certificate == NULL)
++    {
++        EVP_PKEY_free(key);
++        X509_free(certificate);
+         return nil;
+     }
+     
+     BIO *pemBuffer = BIO_new(BIO_s_mem());
+-    PEM_write_bio_X509(pemBuffer, certificate);
+-    
+     BIO *privateKeyBuffer = BIO_new(BIO_s_mem());
+-    PEM_write_bio_PrivateKey(privateKeyBuffer, key, NULL, NULL, 0, NULL, NULL);
++    if (!pemBuffer || !privateKeyBuffer || PEM_write_bio_X509(pemBuffer, certificate) != 1 ||
++        PEM_write_bio_PrivateKey(privateKeyBuffer, key, NULL, NULL, 0, NULL, NULL) != 1)
++    {
++        BIO_free(pemBuffer);
++        BIO_free(privateKeyBuffer);
++        EVP_PKEY_free(key);
++        X509_free(certificate);
++        return nil;
++    }
+     
+     char *pemBytes = NULL;
+     NSUInteger pemSize = BIO_get_mem_data(pemBuffer, &pemBytes);
+@@ -119,6 +128,8 @@
+     
+     BIO_free(pemBuffer);
+     BIO_free(privateKeyBuffer);
++    EVP_PKEY_free(key);
++    X509_free(certificate);
+     
+     return self;
+ }

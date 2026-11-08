@@ -55,6 +55,9 @@ public:
 	string	m_strProvData;
 	string	m_strEntitleData;
 	string	m_strApplicationId;
+	// ForgeSign: sign with the profile entitlements the app already declares
+	// (AltStore/AltSign rule) instead of the whole profile. Off by default.
+	bool	m_bMatchAppEntitlements = false;
 
 private:
 	void*	m_evpPKey;

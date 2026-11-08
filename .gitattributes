@@ -1,3 +1,4 @@
-# Vendored patches must keep the upstream context lines byte-for-byte,
-# including trailing whitespace, or `git apply` rejects them.
-*.patch -whitespace
+# Keep upstream license text and patch context verbatim.
+App/Resources/ThirdPartyNotices.txt -whitespace
+scripts/dependencies/*.patch -whitespace
+vendor/*.patch -whitespace

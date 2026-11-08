@@ -5,3 +5,8 @@ xcuserdata/
 .DS_Store
 __pycache__/
 *.ipa
+
+# Rebuilt from checksum-pinned source; see scripts/prepare_dependencies.py.
+vendor/AltSign/
+vendor/openssl/OpenSSL.xcframework/
+vendor/openssl/build-info.json

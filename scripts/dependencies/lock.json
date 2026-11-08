@@ -1,0 +1,23 @@
+{
+  "openssl": {
+    "version": "3.5.9",
+    "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+    "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
+    "source_date_epoch": 1790640000
+  },
+  "altsign": {
+    "revision": "4746156408ca633bbfce4c267949053ca45886fe",
+    "url": "https://codeload.github.com/rileytestut/AltSign/tar.gz/4746156408ca633bbfce4c267949053ca45886fe",
+    "sha256": "f28bcf981cc03282e03502e9307ec7aa767bf06086db4aaef5b53480338b0283"
+  },
+  "ldid": {
+    "revision": "6a6a92de56ae2110e4d6f292b315df0f586d6af5",
+    "url": "https://codeload.github.com/rileytestut/ldid/tar.gz/6a6a92de56ae2110e4d6f292b315df0f586d6af5",
+    "sha256": "ce3a67eb24a579fee08276d1b725d067e458b5bd60f5f9fa82c4cea035435165"
+  },
+  "libplist": {
+    "revision": "17546f53ac1377b0d4f45a800aaec7366ba5b6a0",
+    "url": "https://codeload.github.com/libimobiledevice/libplist/tar.gz/17546f53ac1377b0d4f45a800aaec7366ba5b6a0",
+    "sha256": "92f5cb398e39ba0f61799610dae7b22278a68e961afd939e635bec3d79aa7021"
+  }
+}

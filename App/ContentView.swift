@@ -1,10 +1,9 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var signer = SigningService()
+    @EnvironmentObject private var signer: SigningService
     @StateObject private var altServer = AltServerClient()
     @StateObject private var altProvisioner = AltServerProvisioningService()
-    @StateObject private var deviceInstall = DeviceInstallationModel()
 
     @EnvironmentObject private var certStore: CertificateStore
     @EnvironmentObject private var profileStore: ProfileStore
@@ -19,8 +18,14 @@ struct ContentView: View {
     @State private var ipaURL: URL?
     @State private var password = ""
     @State private var bundleId = ""
+    /// Bundle ID that Apple Account provisioning filled in, so the next IPA
+    /// does not inherit it and install over the previous app.
+    @State private var autoBundleID: String?
     @State private var removeExtensions = false
     @State private var enableDocuments = false
+    /// Off by default so existing signing is unchanged. On = AltStore's rule:
+    /// only the profile entitlements the app itself declares.
+    @AppStorage("matchAppEntitlements") private var matchAppEntitlements = false
     @State private var dylibURL: URL?
     @State private var injectIntoExtensions = false
     @State private var preflightState: IPAPreflightState = .idle
@@ -35,6 +40,7 @@ struct ContentView: View {
     @State private var showDylibImporter = false
     @State private var showShare = false
     @State private var importError: String?
+    @State private var isImporting = false
     @State private var provisioningWarning: String?
     @AppStorage("automaticProvisioningEnabled") private var automaticProvisioningEnabled = false
     @AppStorage("altServerAppleID") private var altServerAppleID = ""
@@ -47,24 +53,6 @@ struct ContentView: View {
     @AppStorage("retainRefreshSources") private var retainRefreshSources = false
     @State private var altServerApplePassword = ""
     @State private var signNotice: String?
-    /// Bundle ID that Apple Account provisioning filled in, so the next IPA
-    /// does not inherit it and install over the previous app.
-    @State private var autoBundleID: String?
-    /// An IPA that arrived (Files, Sources, Library refresh) while a run was in
-    /// progress; staged once the run ends so it cannot delete the input in use.
-    @State private var deferredIPA: DeferredIPA?
-
-    private struct DeferredIPA {
-        let url: URL
-        let fallbackToSource: Bool
-        let name: String?
-        let bundleID: String?
-    }
-
-    /// Signing or provisioning is running; inputs are locked until it ends.
-    private var isBusy: Bool {
-        signer.phase == .signing || signer.phase == .provisioning
-    }
 
     private var anisetteMode: AnisetteMode {
         AnisettePreference.resolvedMode(storedMode: anisetteModeRaw,
@@ -77,14 +65,6 @@ struct ContentView: View {
                                 customURLText: anisetteServerURL)
     }
 
-    /// The UDID ForgeSign can honestly check a pairing record against: the one
-    /// entered for provisioning, or the AltStore-injected `ALTDeviceID`.
-    private var resolvedDeviceUDID: String? {
-        let entered = altServerDeviceIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !entered.isEmpty { return entered }
-        return ProvisioningAuditService.currentDeviceIdentifier
-    }
-
     var body: some View {
         NavigationStack {
             ZStack {
@@ -93,16 +73,23 @@ struct ContentView: View {
                         header
 
                         inputSection
-                            .disabled(isBusy)
+                            .disabled(!signer.canAcceptInput)
                         if ipaURL != nil {
                             IPAPreflightCard(state: preflightState,
                                              certificate: certStore.selected,
                                              profile: profileStore.selected,
-                                             audit: provisioningAudit,
-                                             manualSigningAvailable: canSignManually)
+                                             audit: provisioningAudit)
+                        }
+                        if signer.isStaging {
+                            FileCopyProgressView(title: "Importing file…", progress: signer.copyProgress,
+                                                 cancel: signer.cancelInputCopy)
+                        }
+                        if refreshSources.isRetaining {
+                            FileCopyProgressView(title: "Keeping original for refresh…", progress: refreshSources.copyProgress,
+                                                 cancel: refreshSources.cancelRetention)
                         }
                         optionsSection
-                            .disabled(isBusy)
+                            .disabled(signer.isBusy)
                         AutomaticProvisioningSection(
                             isEnabled: $automaticProvisioningEnabled,
                             appleID: $altServerAppleID,
@@ -114,7 +101,7 @@ struct ContentView: View {
                             altServer: altServer,
                             provisioner: altProvisioner
                         )
-                        .disabled(isBusy)
+                        .disabled(signer.isBusy)
                         DylibInjectionSection(dylibURL: $dylibURL,
                                               injectIntoExtensions: $injectIntoExtensions,
                                               chooseDylib: { showDylibImporter = true },
@@ -122,15 +109,7 @@ struct ContentView: View {
                                                   dylibURL = nil
                                                   injectIntoExtensions = false
                                               })
-                        .disabled(isBusy)
-                        DeviceInstallationSection(
-                            model: deviceInstall,
-                            availableMethods: installCoordinator.availableMethods,
-                            expectedUDID: resolvedDeviceUDID,
-                            anisetteSource: anisettePlan.summary,
-                            importMessage: imports.pairingImportMessage,
-                            onImportMessageShown: { imports.pairingImportMessage = nil }
-                        )
+                        .disabled(!signer.canAcceptInput)
                         signButton
 
                         if let hint = signReadinessHint {
@@ -139,6 +118,15 @@ struct ContentView: View {
 
                         if let signNotice {
                             warningCard(signNotice)
+                            if canSignWithoutExtensions {
+                                GlassSecondaryButton(label: "Sign Without App Extensions",
+                                                     systemImage: "puzzlepiece.extension") {
+                                    removeExtensions = true
+                                    sign(allowAutomaticProvisioning: false)
+                                }
+                                .padding(.horizontal, T.pad)
+                                .padding(.top, 12)
+                            }
                         }
 
                         if let provisioningWarning, signer.phase != .provisioning {
@@ -154,8 +142,10 @@ struct ContentView: View {
                         }
                     }
                     .padding(.bottom, 40)
+                    .forgeReadableWidth()
                 }
                 .scrollIndicators(.hidden)
+                .scrollDismissesKeyboard(.interactively)
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
@@ -204,27 +194,11 @@ struct ContentView: View {
                 .sheet(isPresented: $showShare) {
                     if let signedIPA { ShareSheet(items: [signedIPA]) }
                 }
-                .onChange(of: repoStore.pendingIPA) { pending in
-                    // A repo download landed — load it as the input to sign.
-                    if let pending {
-                        stageIPA(pending, fallbackToSource: true)
-                        repoStore.pendingIPA = nil
-                    }
-                }
-                .onChange(of: imports.pending) { _ in
-                    guard let request = imports.consume() else { return }
-                    switch request {
-                    case .ipa(let url): stageIPA(url)
-                    case .refresh(let url, let bundleID, let name):
-                        stageIPA(url, as: name, bundleID: bundleID)
-                    case .dylib(let url): stageDylib(url)
-                    case .pairingFile(let url):
-                        // Import straight into the Keychain; the Device
-                        // Installation card re-reads the store when it appears.
-                        deviceInstall.importPairing(from: url)
-                        imports.pairingImportMessage = deviceInstall.message
-                    }
-                }
+                .onAppear { processPendingImports() }
+                .onChange(of: repoStore.pendingIPA) { _ in processPendingImports() }
+                .onChange(of: imports.pending) { _ in processPendingImports() }
+                .onChange(of: isImporting) { _ in processPendingImports() }
+                .onChange(of: signer.activeInputChecks) { _ in processPendingImports() }
                 .onChange(of: profileStore.profiles) { _ in refreshProvisioningAudit() }
                 .onChange(of: profileStore.isRefreshingMetadata) { _ in refreshProvisioningAudit() }
                 .onChange(of: profileStore.selectedID) { _ in refreshProvisioningAudit() }
@@ -237,11 +211,17 @@ struct ContentView: View {
                 .onChange(of: remoteAnisetteServerAddress) { _ in refreshProvisioningAudit() }
                 .onChange(of: signer.phase) { _ in
                     if case .signing = signer.phase { signNotice = nil }
-                    if !isBusy, let deferred = deferredIPA {
-                        deferredIPA = nil
-                        signNotice = nil
-                        stageIPA(deferred.url, fallbackToSource: deferred.fallbackToSource,
-                                 as: deferred.name, bundleID: deferred.bundleID)
+                    if !signer.isBusy { processPendingImports() }
+                }
+                .onChange(of: signer.stagingResetID) { _ in
+                    ipaURL = nil
+                    dylibURL = nil
+                    preflightState = .idle
+                    provisioningAudit = nil
+                }
+                .onChange(of: history.records) { _ in
+                    if let signedIPA, !FileManager.default.fileExists(atPath: signedIPA.path) {
+                        self.signedIPA = nil
                     }
                 }
             }
@@ -287,81 +267,27 @@ struct ContentView: View {
                     }
                 }
             } else {
-                GlassInputRow(icon: "lock.fill", label: "P12 password", placeholder: "Required", text: $password, isSecure: true)
+                GlassInputRow(icon: "lock.fill", label: "P12 password", placeholder: "If set", text: $password, isSecure: true)
             }
         }
     }
 
     private var certificateRow: some View {
-        Button {
-            showCertSheet = true
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "key.fill")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(T.accent2)
-                    .frame(width: 22)
-                Text("Certificate (.p12)").font(T.sans(15, .medium)).foregroundColor(T.ink)
-                Spacer(minLength: 8)
-                if let cert = certStore.selected {
-                    let expiry = P12Inspector.expiry(cert.notAfter)
-                    GlassStatusPill(text: expiry.text, color: expiry.tone.color(in: T))
-                    Text(cert.displayName)
-                        .font(T.mono(12))
-                        .foregroundColor(T.ink2)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: 130, alignment: .trailing)
-                } else {
-                    Text("Choose…")
-                        .font(T.sans(13, .medium))
-                        .foregroundColor(T.ink3)
-                }
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(T.ink4)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(GlassTactileButtonStyle())
+        let certificate = certStore.selected
+        let expiry = P12Inspector.expiry(certificate?.notAfter)
+        return SigningAssetRow(
+            icon: "key.fill", label: "Certificate (.p12)", value: certificate?.displayName,
+            status: certificate == nil ? nil : expiry.text, statusColor: expiry.tone.color(in: T)
+        ) { showCertSheet = true }
     }
 
     private var profileRow: some View {
-        Button {
-            showProfileSheet = true
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(T.accent2)
-                    .frame(width: 22)
-                Text("Profile (.mobileprovision)").font(T.sans(15, .medium)).foregroundColor(T.ink)
-                Spacer(minLength: 8)
-                if let profile = profileStore.selected {
-                    let expiry = P12Inspector.expiry(profile.notAfter)
-                    GlassStatusPill(text: expiry.text, color: expiry.tone.color(in: T))
-                    Text(profile.displayName)
-                        .font(T.mono(12))
-                        .foregroundColor(T.ink2)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(maxWidth: 130, alignment: .trailing)
-                } else {
-                    Text("Choose…")
-                        .font(T.sans(13, .medium))
-                        .foregroundColor(T.ink3)
-                }
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundColor(T.ink4)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 14)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(GlassTactileButtonStyle())
+        let profile = profileStore.selected
+        let expiry = P12Inspector.expiry(profile?.notAfter)
+        return SigningAssetRow(
+            icon: "checkmark.seal.fill", label: "Provisioning profile", value: profile?.displayName,
+            status: profile == nil ? nil : expiry.text, statusColor: expiry.tone.color(in: T)
+        ) { showProfileSheet = true }
     }
 
     // MARK: - Options
@@ -373,6 +299,8 @@ struct ContentView: View {
             GlassToggleRow(label: "Remove app extensions", isOn: $removeExtensions)
             GlassRowDivider()
             GlassToggleRow(label: "Enable Files import / sharing", isOn: $enableDocuments)
+            GlassRowDivider()
+            GlassToggleRow(label: "Use app's own entitlements (AltStore style)", isOn: $matchAppEntitlements)
         }
     }
 
@@ -399,14 +327,14 @@ struct ContentView: View {
             }
             .foregroundColor(T.isDark ? .white : T.ink)
             .padding(.horizontal, 16)
-            .frame(height: 52)
+            .padding(.vertical, 15)
+            .frame(minHeight: 52)
             .frame(maxWidth: .infinity)
             .glassSurface(.button)
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(T.rule2, lineWidth: AppStroke.hairline)
             }
-            .shimmer(isActive: signing)
             .opacity(!canSign || busy ? 0.45 : 1)
         }
         .buttonStyle(GlassTactileButtonStyle())
@@ -540,13 +468,6 @@ struct ContentView: View {
                             installCoordinator.cancel()
                         }
                     }
-                    if installCoordinator.lastError != nil, !installCoordinator.isInstalling,
-                       let fallback = installCoordinator.fallbackMethods.first {
-                        GlassSecondaryButton(label: "Use \(fallback.displayName) Instead",
-                                             systemImage: "arrow.triangle.branch") {
-                            installCoordinator.retryWithFallback()
-                        }
-                    }
                     if installCoordinator.lastError != nil, !installCoordinator.isInstalling {
                         GlassSecondaryButton(label: "Try Again", systemImage: "arrow.clockwise") {
                             installCoordinator.retry()
@@ -568,69 +489,91 @@ struct ContentView: View {
 
     // MARK: - Logic
 
+    private func processPendingImports() {
+        // Keep imports queued while the native engine or inspection owns its
+        // inputs. Also handles an Open In request received before this tab mounts.
+        guard signer.canAcceptInput, !isImporting else { return }
+        if let request = imports.consume() {
+            switch request {
+            case .ipa(let url): stageIPA(url)
+            case .dylib(let url): stageDylib(url)
+            case .refresh(let url, let bundleID, let name):
+                stageIPA(url, as: name, bundleID: bundleID)
+            }
+        } else if let pending = repoStore.pendingIPA {
+            repoStore.pendingIPA = nil
+            stageIPA(pending)
+        }
+    }
+
     /// - Parameters:
     ///   - name: file name to stage under (a refresh's kept original is stored
     ///     under an internal name; this keeps the output named after the app).
     ///   - bundleID: bundle ID to sign with (a refresh reuses the installed one).
-    private func stageIPA(_ source: URL, fallbackToSource: Bool = false,
-                          as name: String? = nil, bundleID: String? = nil) {
-        // Staging prunes the other archives in the work folder, which would
-        // delete the package a running sign or provisioning pass still reads.
-        guard !isBusy else {
-            deferredIPA = DeferredIPA(url: source, fallbackToSource: fallbackToSource,
-                                      name: name, bundleID: bundleID)
-            signNotice = "A new IPA arrived while signing. It will load when this run finishes."
-            return
-        }
-        if let autoBundleID {
-            if bundleId == autoBundleID { bundleId = "" }
-            self.autoBundleID = nil
-        }
-        let localURL = signer.stage(source, as: name) ?? (fallbackToSource ? source : nil)
-        guard let localURL else {
-            ipaURL = nil
-            preflightState = .failed("The IPA could not be copied into ForgeSign storage.")
-            return
-        }
-
-        ipaURL = localURL
-        if let bundleID { bundleId = bundleID }
-        provisioningAudit = nil
-        signer.pruneStagedArchives(keeping: localURL)
-        guard FileManager.default.fileExists(atPath: localURL.path) else {
-            ipaURL = nil
-            preflightState = .failed("The staged IPA is no longer available. Please choose it again.")
-            return
-        }
-        preflightState = .inspecting
-        let temporaryDirectory = signer.tempDir
-
-        Task.detached(priority: .utility) {
-            let result = IPAPreflightService.inspect(ipa: localURL,
-                                                      temporaryDirectory: temporaryDirectory)
-            await MainActor.run {
-                guard ipaURL == localURL else { return }
-                switch result {
-                case .success(let inspection):
-                    preflightState = .ready(inspection)
-                    refreshProvisioningAudit(inspection)
-                case .failure(let error):
-                    preflightState = .failed(error.localizedDescription)
-                    provisioningAudit = nil
+    private func stageIPA(_ source: URL, as name: String? = nil, bundleID: String? = nil) {
+        guard signer.canAcceptInput, !isImporting else { return }
+        isImporting = true
+        Task {
+            defer { isImporting = false }
+            do {
+                let localURL = try await signer.stage(source, as: name)
+                ipaURL = localURL
+                if let autoBundleID {
+                    if bundleId == autoBundleID { bundleId = "" }
+                    self.autoBundleID = nil
                 }
+                if let bundleID { bundleId = bundleID }
+                provisioningAudit = nil
+                signer.pruneStagedArchives(keeping: localURL)
+                preflightState = .inspecting
+                signer.beginInputCheck()
+                let temporaryDirectory = signer.tempDir
+                Task.detached(priority: .utility) {
+                    let result = IPAPreflightService.inspect(ipa: localURL, temporaryDirectory: temporaryDirectory)
+                    await MainActor.run {
+                        signer.endInputCheck()
+                        guard ipaURL == localURL else { return }
+                        switch result {
+                        case .success(let inspection):
+                            preflightState = .ready(inspection)
+                            refreshProvisioningAudit(inspection)
+                        case .failure(let error):
+                            preflightState = .failed(error.localizedDescription)
+                            provisioningAudit = nil
+                        }
+                    }
+                }
+            } catch is CancellationError {
+                // Keep the previous input and its preflight result.
+            } catch {
+                importError = error.localizedDescription
             }
         }
     }
 
     private func stageDylib(_ source: URL) {
-        dylibURL = signer.stage(source, as: source.lastPathComponent)
+        guard signer.canAcceptInput, !isImporting else { return }
+        isImporting = true
+        Task {
+            defer { isImporting = false }
+            do {
+                dylibURL = try await signer.stage(source)
+                importError = nil
+            } catch is CancellationError {
+                // Keep the previous optional injection.
+            } catch {
+                importError = error.localizedDescription
+            }
+        }
     }
 
     private var effectivePassword: String? {
         if let cert = certStore.selected, let saved = certStore.savedPassword(for: cert) {
             return saved
         }
-        return password.isEmpty ? nil : password
+        // An empty password is valid for an unprotected P12. The signing
+        // engine still validates the certificate before using it.
+        return password
     }
 
     private var isAppleAccountReady: Bool {
@@ -646,6 +589,7 @@ struct ContentView: View {
         if signer.phase == .signing { return nil }
         if signer.phase == .provisioning { return altProvisioner.statusText }
         if ipaURL == nil { return "Choose an IPA to begin." }
+        if let blocker = preflightState.signingBlocker { return blocker }
         if profileStore.isRefreshingMetadata { return "Reading provisioning profiles…" }
 
         if automaticProvisioningEnabled {
@@ -655,13 +599,8 @@ struct ContentView: View {
                 }
                 return "Add a certificate and profile, or enter your Apple Account details plus an anisette source."
             }
-            switch preflightState {
-            case .ready: return nil
-            case .failed:
-                return "The IPA could not be inspected — import a certificate and profile to sign manually."
-            default:
-                return "Inspecting the IPA…"
-            }
+            if case .ready = preflightState { return nil }
+            return "Inspecting the IPA…"
         }
 
         if !canSignManually { return "Add a certificate (.p12 with its password) and a provisioning profile." }
@@ -670,6 +609,7 @@ struct ContentView: View {
 
     private var canSign: Bool {
         guard ipaURL != nil else { return false }
+        guard signer.canAcceptInput, !isImporting, preflightState.signingBlocker == nil else { return false }
         guard !profileStore.isRefreshingMetadata else { return false }
         guard automaticProvisioningEnabled else { return canSignManually }
         let inspectionReady: Bool
@@ -723,14 +663,23 @@ struct ContentView: View {
         .padding(.top, 10)
     }
 
+    private var canSignWithoutExtensions: Bool {
+        !removeExtensions && provisioningAudit?.onlyExtensionsBlocked == true
+    }
+
     private var canSignManually: Bool {
         certStore.selected != nil && profileStore.selected != nil && effectivePassword != nil
     }
 
     private func sign(allowAutomaticProvisioning: Bool = true) {
+        guard !signer.isBusy, !isImporting else { return }
         signNotice = nil
         guard let ipa = ipaURL else {
             signNotice = "Choose an IPA first — there is nothing to sign yet."
+            return
+        }
+        if let blocker = preflightState.signingBlocker {
+            signNotice = blocker
             return
         }
 
@@ -747,7 +696,10 @@ struct ContentView: View {
                 deviceIdentifier: altServerDeviceIdentifier
             )
             provisioningAudit = audit
-            if isAppleAccountReady {
+            // Apple is only contacted when the imported certificate and
+            // profiles cannot cover this IPA; a working manual setup never
+            // waits on (or fails with) Apple's sign-in service.
+            if isAppleAccountReady && (!canSignManually || !audit.isReady) {
                 obtainMissingProfiles(inspection: inspection,
                                       audit: audit,
                                       certificate: certStore.selected)
@@ -764,46 +716,36 @@ struct ContentView: View {
             return
         }
         let p12 = certStore.fileURL(for: cert)
-        let audit: ProvisioningAudit?
-        if case .ready(let inspection) = preflightState {
-            audit = ProvisioningAuditService.makeAudit(
-                inspection: inspection,
-                profiles: profileStore.profiles,
-                preferredProfileID: profile.id,
-                certificate: cert,
-                requestedBundleID: bundleId,
-                removeExtensions: removeExtensions,
-                deviceIdentifier: automaticProvisioningEnabled && isAppleAccountReady
-                    ? altServerDeviceIdentifier
-                    : ProvisioningAuditService.currentDeviceIdentifier
-            )
-        } else {
-            audit = nil
-        }
-        if let audit {
-            provisioningAudit = audit
-            if let blocker = audit.rows.first(where: { $0.kind != .app && $0.state.isBlocking }) {
-                signNotice = "\(blocker.kind.displayName) \(blocker.resolvedBundleID): \(blocker.detail) Import a matching profile or use Apple Account provisioning."
-                return
-            }
+        guard case .ready(let inspection) = preflightState else { return }
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: inspection,
+            profiles: profileStore.profiles,
+            preferredProfileID: profile.id,
+            certificate: cert,
+            requestedBundleID: bundleId,
+            removeExtensions: removeExtensions,
+            deviceIdentifier: automaticProvisioningEnabled && isAppleAccountReady
+                ? altServerDeviceIdentifier
+                : ProvisioningAuditService.currentDeviceIdentifier
+        )
+        provisioningAudit = audit
+        if let blocker = audit.rows.first(where: { $0.state.isBlocking }) {
+            signNotice = "\(blocker.kind.displayName) \(blocker.resolvedBundleID): \(blocker.detail) "
+                + (canSignWithoutExtensions
+                    ? "Import a matching profile, or sign without app extensions. Extension features, such as widgets or sharing, will be unavailable."
+                    : "Import a matching profile or use Apple Account provisioning.")
+            return
         }
 
-        let plannedIDs = audit?.selectedProfileIDs ?? []
-        let profileFiles: [ProfileRecord]
-        if !plannedIDs.isEmpty {
-            let resolved = plannedIDs.compactMap { id in
-                profileStore.profiles.first { $0.id == id }
-            }
-            profileFiles = resolved.contains(where: { $0.id == profile.id })
-                ? resolved : [profile] + resolved
-        } else {
-            // Preserve the manual path if inspection is unavailable.
-            profileFiles = [profile] + profileStore.profiles.filter {
-                $0.id != profile.id && $0.profileIsAuthentic
-            }
+        // The audit selects a valid root profile as well as nested profiles.
+        // An unrelated selected profile must not be added back to this plan.
+        let profileFiles = audit.selectedProfileIDs.compactMap { id in
+            profileStore.profiles.first { $0.id == id }
         }
-        let profileURLs = profileFiles.map { profileStore.fileURL(for: $0) }
-        let profileNames = profileFiles.map(\.displayName)
+        guard !profileFiles.isEmpty, profileFiles.count == audit.selectedProfileIDs.count else {
+            signNotice = "The matching profiles are no longer available. Choose them again."
+            return
+        }
         let certCN = cert.commonName
         // The profiles embedded in the result expire when the earliest of the
         // profiles we are about to embed expires. Recorded with the library
@@ -815,98 +757,42 @@ struct ContentView: View {
         if allowAutomaticProvisioning { provisioningWarning = nil }
         signedIPA = nil
         lastRecordID = nil
-        // End any install still waiting on the previous IPA through the
-        // coordinator, so its operation and token do not block the next one.
-        installCoordinator.cancel()
+        install.abortQuietly()
         installCoordinator.reset()
-        install.installStatus = ""
+        InstallKeepAlive.shared.stop()
         let output = history.uniqueOutputURL(for: ipa.lastPathComponent)
         let outName = output.lastPathComponent
-        // A private scratch folder per run: a preflight of the next IPA can use
-        // the shared temp folder without being wiped when this run ends.
-        let tempDir = signer.tempDir.appendingPathComponent("run-\(UUID().uuidString)", isDirectory: true)
-        try? FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let partialOutput = tempDir.appendingPathComponent("signed.ipa.partial")
-        let bid = bundleId.trimmingCharacters(in: .whitespaces)
-        let rmExt = removeExtensions
-        let enDocs = enableDocuments
-        let selectedDylib = dylibURL
-        let injectExt = injectIntoExtensions
-
-        Task.detached(priority: .userInitiated) {
-            defer { try? FileManager.default.removeItem(at: tempDir) }
-            for (index, profileURL) in profileURLs.enumerated() {
-                let validation = SigningService.validateSigningAsset(
-                    p12: p12, password: pw, profile: profileURL
-                )
-                guard validation.ok else {
-                    let name = profileNames.indices.contains(index) ? profileNames[index] : profileURL.lastPathComponent
-                    await MainActor.run {
-                        signer.phase = .failed("Profile “\(name)” cannot be used with the selected certificate: \(validation.message)")
-                    }
-                    return
+        let request = SigningRequest(
+            ipa: ipa, p12: p12, password: pw,
+            profiles: profileFiles.map { SigningRequest.Profile(url: profileStore.fileURL(for: $0), name: $0.displayName) },
+            bundleID: bundleId.trimmingCharacters(in: .whitespacesAndNewlines),
+            output: output, temporaryDirectory: signer.tempDir,
+            removeExtensions: removeExtensions, enableDocuments: enableDocuments,
+            matchAppEntitlements: matchAppEntitlements, dylib: dylibURL,
+            injectIntoExtensions: injectIntoExtensions
+        )
+        Task {
+            defer { signer.cleanTemp() }
+            switch await SigningWorker.run(request) {
+            case .failure(let error):
+                signer.phase = .failed(error.message)
+            case .success(let result):
+                let record = history.append(inputName: ipa.lastPathComponent,
+                                            outputName: outName, bundleId: result.bundleID,
+                                            version: result.version, certificateCN: certCN,
+                                            profileExpiresAt: profileExpiry)
+                lastRecordID = record.id
+                if retainSource {
+                    // Keep the input locked until the original copy finishes.
+                    // Only the copy is cancellable; the verified IPA is retained.
+                    let kept = await refreshSources.retain(ipa, for: record.id)
+                    history.setRefreshSourceName(kept, for: record.id)
+                    if let message = refreshSources.retentionError { signNotice = message }
                 }
-            }
-
-            let signingIPA: URL
-            var preparedIPA: URL?
-            if let selectedDylib {
-                let prepared = tempDir.appendingPathComponent("fs-injected-\(UUID().uuidString).ipa")
-                switch DylibInjectionService.prepare(ipa: ipa,
-                                                      dylib: selectedDylib,
-                                                      output: prepared,
-                                                      temporaryDirectory: tempDir,
-                                                      injectIntoExtensions: injectExt) {
-                case .success:
-                    signingIPA = prepared
-                    preparedIPA = prepared
-                case .failure(let error):
-                    await MainActor.run {
-                        signer.phase = .failed(error.localizedDescription)
-                    }
-                    return
-                }
-            } else {
-                signingIPA = ipa
-            }
-
-            let result = SigningService.sign(ipa: signingIPA, p12: p12, password: pw, profiles: profileURLs,
-                                             bundleId: bid, output: partialOutput, tempDir: tempDir,
-                                             removeExtensions: rmExt, enableDocuments: enDocs)
-            if let preparedIPA {
-                try? FileManager.default.removeItem(at: preparedIPA)
-            }
-            let verification = result.ok
-                ? SigningService.verify(ipa: partialOutput, temporaryDirectory: tempDir)
-                : (ok: false, message: result.message)
-            await MainActor.run {
-                guard result.ok, verification.ok else {
-                    try? FileManager.default.removeItem(at: partialOutput)
-                    signer.phase = .failed(result.ok ? verification.message : result.message)
-                    return
-                }
-                do {
-                    try FileManager.default.moveItem(at: partialOutput, to: output)
-                    signedIPA = output
-                    signedBundleId = result.signedBundleId
-                    signedVersion = result.signedVersion
-                    signer.phase = .done(result.message)
-                    let record = history.append(inputName: ipa.lastPathComponent,
-                                                outputName: outName,
-                                                bundleId: result.signedBundleId,
-                                                version: result.signedVersion,
-                                                certificateCN: certCN,
-                                                profileExpiresAt: profileExpiry)
-                    lastRecordID = record.id
-                    if retainSource {
-                        // Retain the *original* package, never the signed output.
-                        let kept = refreshSources.retain(ipa, for: record.id)
-                        history.setRefreshSourceName(kept, for: record.id)
-                    }
-                } catch {
-                    try? FileManager.default.removeItem(at: partialOutput)
-                    signer.phase = .failed("The signed IPA could not be finalized in the library.")
-                }
+                signedIPA = result.url
+                signedBundleId = result.bundleID
+                signedVersion = result.version
+                signer.phase = .done(result.message)
             }
         }
     }

@@ -9,6 +9,7 @@ struct ForgeSignMobileApp: App {
     @StateObject private var repositories = RepositoryStore()
     @StateObject private var imports = ImportRouter()
     @StateObject private var refreshSources = RefreshSourceStore()
+    @StateObject private var signer = SigningService()
 
     var body: some Scene {
         WindowGroup {
@@ -21,11 +22,13 @@ struct ForgeSignMobileApp: App {
                 .environmentObject(repositories)
                 .environmentObject(imports)
                 .environmentObject(refreshSources)
+                .environmentObject(signer)
+                .onOpenURL { imports.receive($0) }
         }
     }
 }
 
-/// Root: Sign + Library tabs, theme injection + Dynamic Type cap.
+/// Root tabs and theme, with typography following the user's Dynamic Type size.
 /// The ambient glass backdrop is mounted inside each tab's NavigationStack.
 private struct ForgeRootView: View {
     @Environment(\.colorScheme) private var colorScheme
@@ -36,8 +39,13 @@ private struct ForgeRootView: View {
     @EnvironmentObject private var refreshSources: RefreshSourceStore
 
     @State private var tab = 0
+    @ScaledMetric(relativeTo: .body) private var typeScale: CGFloat = 1
 
-    private var theme: ForgeTheme { colorScheme == .dark ? .dark : .light }
+    private var theme: ForgeTheme {
+        var theme: ForgeTheme = colorScheme == .dark ? .dark : .light
+        theme.typeScale = typeScale
+        return theme
+    }
 
     var body: some View {
         TabView(selection: $tab) {
@@ -73,7 +81,6 @@ private struct ForgeRootView: View {
         }
         .tint(theme.accent)
         .forgeTheme(theme)
-        .forgeScaledType()
         .onReceive(NotificationCenter.default.publisher(for: .forgeInstallState)) { notification in
             guard let payload = notification.userInfo,
                   let id = payload["recordID"] as? UUID,
@@ -81,15 +88,12 @@ private struct ForgeRootView: View {
                   let state = SigningRecord.InstallState(rawValue: rawState) else { return }
             history.setInstallState(state, for: id)
         }
-        .onChange(of: repositories.pendingIPA) { ipa in
+        .onReceive(repositories.$pendingIPA) { ipa in
             // A repo download finished — surface it in the Sign tab.
             if ipa != nil { tab = 0 }
         }
-        .onOpenURL { url in
-            // Files / share-sheet imports land on the Sign tab, where the IPA
-            // (or the pairing card) shows what was received.
-            imports.receive(url)
-            tab = 0
+        .onReceive(imports.$pending) { request in
+            if request != nil { tab = 0 }
         }
     }
 }

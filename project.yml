@@ -18,10 +18,8 @@ settings:
 
 packages:
   AltSign:
-    url: https://github.com/rileytestut/AltSign.git
-    # Last upstream revision before the public Swift Package disabled Apple
-    # Account authentication for Marketplace builds.
-    revision: 4746156408ca633bbfce4c267949053ca45886fe
+    # Prepared from checksum-pinned upstream source by scripts/prepare_dependencies.py.
+    path: vendor/AltSign
 
 targets:
   ForgeSignMobile:
@@ -61,15 +59,9 @@ targets:
           - $(SRCROOT)/vendor/zsign
           - $(SRCROOT)/vendor/zsign/common
           - $(SRCROOT)/vendor/zsign/third-party/zlib
-          - $(SRCROOT)/vendor/openssl/include
-        LIBRARY_SEARCH_PATHS:
-          - $(SRCROOT)/vendor/openssl
-        OTHER_LDFLAGS:
-          - -lcrypto
-          - -lssl
+          - $(SRCROOT)/vendor/openssl/OpenSSL.xcframework/ios-arm64/OpenSSL.framework/Headers
         SWIFT_OPTIMIZATION_LEVEL: -Onone
         GCC_PREPROCESSOR_DEFINITIONS:
-          - $(inherited)
           - ZSIGN_VERSION=0.1.0
       configs:
         Release:
@@ -78,12 +70,11 @@ targets:
       - package: AltSign
         product: AltSign-Dynamic
         embed: true
-      # Vendored idevice FFI (MIT). Rebuild with
-      # scripts/build_idevice_xcframework.sh; the Swift wrapper is guarded by
-      # `#if canImport(IDevice)` so the app still builds without it.
-      - framework: vendor/idevice/IDevice.xcframework
+      - package: AltSign
+        product: OpenSSL
+        # SwiftPM already embeds its transitive binary framework. XcodeGen's
+        # explicit product copy would look for a nonexistent wrapper product.
         embed: false
-        codeSign: false
 
   ForgeSignMobileTests:
     type: bundle.unit-test
@@ -99,10 +90,8 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TARGETED_DEVICE_FAMILY: "1,2"
 
-  # UI-preview target for the iOS Simulator. The real app is device-only (the
-  # vendored OpenSSL has no simulator slice), so this target compiles just the
-  # SwiftUI/App layer WITHOUT the zsign bridge or OpenSSL — no FORGE_BRIDGE, no
-  # bridging header, no link flags. Signing is stubbed (see SigningService), but
+  # Lightweight UI-preview/test target: SwiftUI/App without the signing bridge
+  # or Apple Account package. Signing is stubbed (see SigningService), but
   # layout, navigation and the Sources/repo networking all run in the simulator.
   # Safe to delete if you don't want a simulator preview build.
   ForgeSignUISim:
@@ -124,57 +113,6 @@ schemes:
     build:
       targets:
         ForgeSignMobile: all
-      preActions:
-        - name: Prepare AltSign dependency
-          settingsTarget: ForgeSignMobile
-          script: |
-            # This AltSign revision refers to OpenSSL's former `ios` folder;
-            # its pinned OpenSSL revision renamed that folder to `iphoneos`.
-            # Repair only the package checkout, before dependency compilation.
-            SOURCE_PACKAGES_ROOT="${BUILD_DIR%%/Build/*}/SourcePackages"
-            OPENSSL_ROOT="$SOURCE_PACKAGES_ROOT/checkouts/AltSign/Dependencies/OpenSSL"
-            if [ -L "$OPENSSL_ROOT/ios" ] && [ ! -e "$OPENSSL_ROOT/ios" ]; then
-              rm "$OPENSSL_ROOT/ios"
-            fi
-            if [ -d "$OPENSSL_ROOT/iphoneos" ] && [ ! -e "$OPENSSL_ROOT/ios" ]; then
-              ln -s iphoneos "$OPENSSL_ROOT/ios"
-            fi
-            # Xcode 16 no longer expands the recursive header paths emitted by
-            # this pre-Marketplace revision. Its remaining paths are relative
-            # to the generated .xcodeproj, so give them the expected root.
-            ALTSIGN_SOURCE="$SOURCE_PACKAGES_ROOT/checkouts/AltSign/AltSign"
-            ALTSIGN_HEADER_ROOT="$PROJECT_FILE_PATH/AltSign"
-            if [ -L "$ALTSIGN_HEADER_ROOT" ] && [ ! -e "$ALTSIGN_HEADER_ROOT" ]; then
-              rm "$ALTSIGN_HEADER_ROOT"
-            fi
-            if [ -d "$ALTSIGN_SOURCE" ] && [ ! -e "$ALTSIGN_HEADER_ROOT" ]; then
-              ln -s "$ALTSIGN_SOURCE" "$ALTSIGN_HEADER_ROOT"
-            fi
-            # Apple GSA workaround over the pinned AltSign revision, ported from
-            # AltSign's `notarized` branch (PRs #47/#48/#49/#53/#61, 56cd729): send
-            # GrandSlam requests with the anisette provider's client identity
-            # (authenticationUserAgent), retry transient 5xx responses over a fresh
-            # connection, and use the current JSON SMS 2FA endpoints. Kept as a
-            # patch so it can be removed independently once upstream ships it.
-            ALTSIGN_AUTH_PATCH="$SRCROOT/vendor/altsign-gsa-http503.patch"
-            ALTSIGN_REPO="$SOURCE_PACKAGES_ROOT/checkouts/AltSign"
-            if [ -f "$ALTSIGN_AUTH_PATCH" ] && [ -d "$ALTSIGN_SOURCE" ]; then
-              if git -C "$ALTSIGN_SOURCE" apply --reverse --check "$ALTSIGN_AUTH_PATCH" >/dev/null 2>&1; then
-                : # Already applied.
-              else
-                if ! git -C "$ALTSIGN_SOURCE" apply --check "$ALTSIGN_AUTH_PATCH" >/dev/null 2>&1; then
-                  # An older revision of this patch is applied: restore only the
-                  # files it touches, then apply the current one.
-                  git -C "$ALTSIGN_REPO" checkout -- "AltSign/Sources/ALTAppleAPI+Authentication.swift" "AltSign/Apple API/ALTAppleAPI.h"
-                fi
-                if git -C "$ALTSIGN_SOURCE" apply --check "$ALTSIGN_AUTH_PATCH" >/dev/null 2>&1; then
-                  git -C "$ALTSIGN_SOURCE" apply --whitespace=nowarn "$ALTSIGN_AUTH_PATCH"
-                else
-                  echo "error: AltSign GSA workaround no longer applies to the resolved dependency"
-                  exit 1
-                fi
-              fi
-            fi
 
   ForgeSignUISim:
     build:

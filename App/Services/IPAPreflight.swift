@@ -71,6 +71,18 @@ enum IPAPreflightState: Equatable, Sendable {
     case inspecting
     case ready(IPAPreflight)
     case failed(String)
+
+    var signingBlocker: String? {
+        switch self {
+        case .idle: return "Choose an IPA to begin."
+        case .inspecting: return "Inspecting the IPA…"
+        case .failed(let message): return message
+        case .ready(let inspection):
+            return inspection.encryptedExecutableCount > 0
+                ? "This IPA contains encrypted executables. Choose an unencrypted build you are authorized to sign."
+                : nil
+        }
+    }
 }
 
 enum IPAPreflightError: LocalizedError, Sendable {
