@@ -48,7 +48,7 @@ Build the `ForgeSignMobile` scheme for a device. Code signing is disabled in the
 
 The device target pins the last AltSign Swift Package revision whose Apple Account authentication path remains enabled. Its scheme pre-action repairs a stale OpenSSL folder reference in that upstream package before compilation.
 
-The device scheme also applies the experimental `vendor/altsign-gsa-http503.patch`. It ports the current AltSign GSA workaround: a modern AuthKit User-Agent, a fresh connection for each authentication request, bounded retries for Apple 5xx responses, and safe HTML-response diagnostics. Remove that patch and its pre-action block if upstream AltSign ships the fix.
+The device scheme also applies `vendor/altsign-gsa-http503.patch`, ported from AltSign's `notarized` branch. Since October 2026 Apple's GrandSlam rejects sign-ins (-80045, or an HTML 503) whose client identity does not match the client that generated the anisette data, so the patch sends the anisette server's own User-Agent (reported by `/v3/client_info`; akd's otherwise) with matching headers, uses a fresh connection for each authentication request with bounded retries for Apple 5xx responses and safe HTML-response diagnostics, and requests SMS codes through Apple's current JSON endpoints. The pre-action replaces an older revision of the patch automatically. Remove the patch and its pre-action block if the pinned AltSign revision ever ships the fix.
 
 Package a device build with the checked packaging script (the output must not already exist):
 

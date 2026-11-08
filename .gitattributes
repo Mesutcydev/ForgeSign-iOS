@@ -1,0 +1,3 @@
+# Vendored patches must keep the upstream context lines byte-for-byte,
+# including trailing whitespace, or `git apply` rejects them.
+*.patch -whitespace

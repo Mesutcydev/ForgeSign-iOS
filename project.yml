@@ -150,20 +150,29 @@ schemes:
             if [ -d "$ALTSIGN_SOURCE" ] && [ ! -e "$ALTSIGN_HEADER_ROOT" ]; then
               ln -s "$ALTSIGN_SOURCE" "$ALTSIGN_HEADER_ROOT"
             fi
-            # Experimental Apple GSA workaround based on AltSign PRs #47/#48/#49/#53:
-            # use a current AuthKit User-Agent and retry transient 5xx responses over
-            # a fresh URLSession connection. Keep this as a patch over the
-            # pinned dependency so the existing signing implementation remains
-            # unchanged and the experiment can be removed independently.
+            # Apple GSA workaround over the pinned AltSign revision, ported from
+            # AltSign's `notarized` branch (PRs #47/#48/#49/#53/#61, 56cd729): send
+            # GrandSlam requests with the anisette provider's client identity
+            # (authenticationUserAgent), retry transient 5xx responses over a fresh
+            # connection, and use the current JSON SMS 2FA endpoints. Kept as a
+            # patch so it can be removed independently once upstream ships it.
             ALTSIGN_AUTH_PATCH="$SRCROOT/vendor/altsign-gsa-http503.patch"
+            ALTSIGN_REPO="$SOURCE_PACKAGES_ROOT/checkouts/AltSign"
             if [ -f "$ALTSIGN_AUTH_PATCH" ] && [ -d "$ALTSIGN_SOURCE" ]; then
-              if git -C "$ALTSIGN_SOURCE" apply --check "$ALTSIGN_AUTH_PATCH" >/dev/null 2>&1; then
-                git -C "$ALTSIGN_SOURCE" apply --whitespace=nowarn "$ALTSIGN_AUTH_PATCH"
-              elif git -C "$ALTSIGN_SOURCE" apply --reverse --check "$ALTSIGN_AUTH_PATCH" >/dev/null 2>&1; then
-                :
+              if git -C "$ALTSIGN_SOURCE" apply --reverse --check "$ALTSIGN_AUTH_PATCH" >/dev/null 2>&1; then
+                : # Already applied.
               else
-                echo "error: AltSign GSA workaround no longer applies to the resolved dependency"
-                exit 1
+                if ! git -C "$ALTSIGN_SOURCE" apply --check "$ALTSIGN_AUTH_PATCH" >/dev/null 2>&1; then
+                  # An older revision of this patch is applied: restore only the
+                  # files it touches, then apply the current one.
+                  git -C "$ALTSIGN_REPO" checkout -- "AltSign/Sources/ALTAppleAPI+Authentication.swift" "AltSign/Apple API/ALTAppleAPI.h"
+                fi
+                if git -C "$ALTSIGN_SOURCE" apply --check "$ALTSIGN_AUTH_PATCH" >/dev/null 2>&1; then
+                  git -C "$ALTSIGN_SOURCE" apply --whitespace=nowarn "$ALTSIGN_AUTH_PATCH"
+                else
+                  echo "error: AltSign GSA workaround no longer applies to the resolved dependency"
+                  exit 1
+                fi
               fi
             fi
 

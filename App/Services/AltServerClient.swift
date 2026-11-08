@@ -122,6 +122,9 @@ final class AltServerClient: ObservableObject {
     @Published private(set) var lastSource: AnisetteSource?
     @Published private(set) var lastRemoteServerName: String?
     @Published private(set) var isCheckingAnisette = false
+    /// User-Agent of the client that generated the last anisette data, when the
+    /// source reported one (remote v3 servers). AltSign must send it to GrandSlam.
+    private(set) var lastAuthenticationUserAgent: String?
     @Published private(set) var anisetteCheckResult: String?
     @Published var selectedServerID: String?
 
@@ -193,6 +196,7 @@ final class AltServerClient: ObservableObject {
 
     func fetchAnisetteData(plan: AnisettePreference.Plan) async throws -> [String: String] {
         var failures: [String] = []
+        lastAuthenticationUserAgent = nil
 
         // 1. A custom, user-run anisette server. An explicit choice is never
         //    silently bypassed.
@@ -203,6 +207,7 @@ final class AltServerClient: ObservableObject {
                 let result = try await RemoteAnisetteClient.fetchAnisette(from: custom)
                 lastSource = .httpServer
                 lastRemoteServerName = result.serverName
+                lastAuthenticationUserAgent = result.userAgent
                 return result.json
             } catch is CancellationError {
                 throw CancellationError()
@@ -218,6 +223,7 @@ final class AltServerClient: ObservableObject {
                 let result = try await RemoteAnisetteClient.fetchAnisette(from: server)
                 lastSource = .remoteServer
                 lastRemoteServerName = result.serverName
+                lastAuthenticationUserAgent = result.userAgent
                 return result.json
             } catch is CancellationError {
                 throw CancellationError()

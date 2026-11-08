@@ -1,17 +1,139 @@
+diff --git a/AltSign/Apple API/ALTAppleAPI.h b/AltSign/Apple API/ALTAppleAPI.h
+index 5ad1e17..4ecfcf7 100644
+--- a/AltSign/Apple API/ALTAppleAPI.h	
++++ b/AltSign/Apple API/ALTAppleAPI.h	
+@@ -28,6 +28,10 @@ NS_ASSUME_NONNULL_BEGIN
+ 
+ @property (class, nonatomic, readonly) ALTAppleAPI *sharedAPI;
+ 
++// Optional. The User-Agent sent with GrandSlam requests. It must match the client that generated the
++// anisette data (anisette v3 servers report it in /v3/client_info). Defaults to akd's user agent.
++@property (nonatomic, copy, nullable) NSString *authenticationUserAgent;
++
+ /* Teams */
+ - (void)fetchTeamsForAccount:(ALTAccount *)account session:(ALTAppleAPISession *)session
+            completionHandler:(void (^)(NSArray<ALTTeam *> *_Nullable teams, NSError *_Nullable error))completionHandler;
 diff --git a/AltSign/Sources/ALTAppleAPI+Authentication.swift b/AltSign/Sources/ALTAppleAPI+Authentication.swift
-index 2d3e50c..fcb6c74 100644
+index 2d3e50c..329ab7c 100644
 --- a/AltSign/Sources/ALTAppleAPI+Authentication.swift
 +++ b/AltSign/Sources/ALTAppleAPI+Authentication.swift
-@@ -436,7 +436,7 @@ private extension ALTAppleAPI
+@@ -37,22 +37,17 @@ public extension ALTAppleAPI
+         
+         do
+         {
++            // Only the fields current GrandSlam clients send, as strings (AltSign 06c4bdd).
+             let clientDictionary = [
+-                "bootstrap": true,
+-                "icscrec": true,
+-                "pbe": false,
+-                "prkgen": true,
++                "bootstrap": "true",
++                "icscrec": "true",
++                "pbe": "false",
++                "prkgen": "true",
+                 "svct": "iCloud",
+-                "loc": Locale.current.identifier,
+-                "X-Apple-Locale": Locale.current.identifier,
++                "loc": "en_US",
+                 "X-Apple-I-MD": anisetteData.oneTimePassword,
+                 "X-Apple-I-MD-M": anisetteData.machineID,
+                 "X-Mme-Device-Id": anisetteData.deviceUniqueIdentifier,
+-                "X-Apple-I-MD-LU": anisetteData.localUserID,
+-                "X-Apple-I-MD-RINFO": anisetteData.routingInfo,
+-                "X-Apple-I-SRL-NO": anisetteData.deviceSerialNumber,
+-                "X-Apple-I-Client-Time": self.dateFormatter.string(from: anisetteData.date),
+-                "X-Apple-I-TimeZone": TimeZone.current.abbreviation() ?? "PST",
+             ] as [String: Any]
+             
+             let context = GSAContext(username: sanitizedAppleID, password: password)
+@@ -307,21 +302,23 @@ private extension ALTAppleAPI
+                                  verificationHandler: @escaping (@escaping (String?) -> Void) -> Void,
+                                  completionHandler: @escaping (Result<Void, Error>) -> Void)
+     {
+-        let requestURL = URL(string: "https://gsa.apple.com/auth/verify/phone/put?mode=sms")!
+-        let verifyURL = URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode?referrer=/auth/verify/phone/put")!
++        // Current SMS endpoints take JSON; the old plist form now fails with HTTP 415 (AltSign 56cd729).
++        let requestURL = URL(string: "https://gsa.apple.com/auth/verify/phone")!
++        let verifyURL = URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode")!
+ 
+         var request = self.makeTwoFactorCodeRequest(url: requestURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
+-        request.httpMethod = "POST"
++        request.httpMethod = "PUT"
++        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
++        request.setValue("application/json", forHTTPHeaderField: "Accept")
+ 
+         do
+         {
+-            let bodyXML = [
+-                "serverInfo": [
+-                    "phoneNumber.id": "1"
+-                ]
++            let bodyJSON = [
++                "phoneNumber": ["id": 1],
++                "mode": "sms"
+             ] as [String : Any]
+             
+-            let bodyData = try PropertyListSerialization.data(fromPropertyList: bodyXML, format: .xml, options: 0)
++            let bodyData = try JSONSerialization.data(withJSONObject: bodyJSON)
+             request.httpBody = bodyData
+         }
+         catch
+@@ -334,6 +331,11 @@ private extension ALTAppleAPI
+             do
+             {
+                 guard error == nil else { throw error! }
++                if let httpResponse = response as? HTTPURLResponse, !(200 ..< 300).contains(httpResponse.statusCode)
++                {
++                    let message = String(format: NSLocalizedString("Could not request an SMS verification code from Apple (HTTP %ld).", comment: ""), httpResponse.statusCode)
++                    throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: message])
++                }
+                 
+                 func responseHandler(verificationCode: String?)
+                 {
+@@ -343,16 +345,16 @@ private extension ALTAppleAPI
+                         
+                         var request = self.makeTwoFactorCodeRequest(url: verifyURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
+                         request.httpMethod = "POST"
++                        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
++                        request.setValue("application/json", forHTTPHeaderField: "Accept")
+                         
+-                        let bodyXML = [
+-                            "securityCode.code": verificationCode,
+-                            "serverInfo": [
+-                                "mode": "sms",
+-                                "phoneNumber.id": "1"
+-                            ]
++                        let bodyJSON = [
++                            "securityCode": ["code": verificationCode],
++                            "phoneNumber": ["id": 1],
++                            "mode": "sms"
+                         ] as [String : Any]
+                         
+-                        let bodyData = try PropertyListSerialization.data(fromPropertyList: bodyXML, format: .xml, options: 0)
++                        let bodyData = try JSONSerialization.data(withJSONObject: bodyJSON)
+                         request.httpBody = bodyData
+                         
+                         let verifyCodeTask = self.session.dataTask(with: request) { (data, response, error) in
+@@ -432,11 +434,16 @@ private extension ALTAppleAPI
+                 "Request": requestParameters
+             ]
+             
++            // Since October 2026 GrandSlam only accepts requests whose User-Agent and
++            // X-MMe-Client-Info match the client that generated the anisette data.
+             let httpHeaders = [
                  "Content-Type": "text/x-xml-plist",
                  "X-MMe-Client-Info": anisetteData.deviceDescription,
-                 "Accept": "*/*",
+-                "Accept": "*/*",
 -                "User-Agent": "akd/1.0 CFNetwork/978.0.7 Darwin/18.7.0"
-+                "User-Agent": "AuthKit/1 (Macintosh; OS X 26.5.2) (com.apple.dt.Xcode/26.0)"
++                "Accept": "text/x-xml-plist",
++                "X-Xcode-Version": "27.0 (27A5218g)",
++                "X-Apple-App-Info": "com.apple.gs.xcode.auth",
++                "Connection": "close",
++                "User-Agent": self.grandSlamUserAgent
              ]
              
              let bodyData = try PropertyListSerialization.data(fromPropertyList: parameters, format: .xml, options: 0)
-@@ -445,45 +445,92 @@ private extension ALTAppleAPI
+@@ -445,45 +452,96 @@ private extension ALTAppleAPI
              request.httpMethod = "POST"
              request.httpBody = bodyData
              httpHeaders.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
@@ -26,6 +148,10 @@ index 2d3e50c..fcb6c74 100644
 +            completionHandler(.failure(error))
 +        }
 +    }
++
++    // GrandSlam rejects requests whose User-Agent doesn't match the client that generated the
++    // anisette data; callers pass the anisette server's user agent (AltSign 06c4bdd).
++    var grandSlamUserAgent: String { self.authenticationUserAgent ?? "akd/1.0 CFNetwork/808.1.4" }
 +
 +    // Isolate every GSA attempt and keep transient server retries within this exchange's deadline.
 +    func sendGrandSlamRequest(_ request: URLRequest, attempt: Int, deadline: TimeInterval,
@@ -128,3 +254,21 @@ index 2d3e50c..fcb6c74 100644
      func makeTwoFactorCodeRequest(url: URL,
                                    dsid: String,
                                    idmsToken: String,
+@@ -495,12 +553,13 @@ private extension ALTAppleAPI
+         let encodedIdentityToken = identityTokenData.base64EncodedString()
+         
+         let httpHeaders = [
+-            "Accept": "application/x-buddyml",
++            "Accept": "text/x-xml-plist",
++            "X-Xcode-Version": "27.0 (27A5218g)",
++            "Connection": "close",
+             "Accept-Language": "en-us",
+-            "Content-Type": "application/x-plist",
+-            "User-Agent": "Xcode",
++            "Content-Type": "text/x-xml-plist",
++            "User-Agent": self.grandSlamUserAgent,
+             "X-Apple-App-Info": "com.apple.gs.xcode.auth",
+-            "X-Xcode-Version": "11.2 (11B41)",
+             "X-Apple-Identity-Token": encodedIdentityToken,
+             "X-Apple-I-MD-M": anisetteData.machineID,
+             "X-Apple-I-MD": anisetteData.oneTimePassword,
