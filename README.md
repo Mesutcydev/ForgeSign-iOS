@@ -141,6 +141,13 @@ installed as an upgrade so app data survives.
   claimed: a sideloaded app cannot rely on `BGTaskScheduler`, and ForgeSign does
   not pretend otherwise.
 
+## What’s new in 2.8.4
+
+- **Apps with extensions sign again.** An explicit App ID profile covers `TEAM.com.example.app`, never `com.example.app.Share`, so since 2.6 every IPA carrying a share extension, widget or keyboard stopped on the extension row with "No imported provisioning profile matches this bundle ID." The app's profile now signs those extensions too, with that profile's entitlements, so the embedded profile and the signed entitlements still agree. iOS can refuse to install an app whose extension carries a profile that doesn't cover it, so a wildcard profile or Apple Account provisioning is still the clean path, and **Remove app extensions** still signs the app alone. A Watch app or App Clip still needs its own matching profile.
+- **No more waiting for a 2FA code that was never sent.** A refused trusted-device code request was ignored, so ForgeSign asked for a code Apple had never sent. It now reports the refusal with Apple's HTTP status. 2.8.2 added this check to the SMS path only.
+
+[Full release notes](WHATS_NEW.md) · [Download the latest IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)
+
 ## What’s new in 2.8.3
 
 - **Custom bundle IDs sign again.** Since 2.8, setting a new bundle ID that no imported profile covers stopped signing with "No imported provisioning profile matches this bundle ID." The selected profile now signs the main app again, as it did up to 2.7, and the App row shows **selected profile** as a warning. Certificate, team, expiry, device and App Group checks still apply. Extensions still need their own matching profile. iOS can refuse to install an app whose bundle ID its profile doesn't cover, so use a wildcard profile or Apple Account provisioning for a matching one. With Apple Account provisioning ready, ForgeSign asks Apple for a matching profile instead.

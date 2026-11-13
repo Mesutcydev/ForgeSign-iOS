@@ -101,7 +101,7 @@ struct MobileCharacterizationTests {
         ])
     }
 
-    @Test("Provisioning audit explains a missing extension profile")
+    @Test("Provisioning audit names the profile an extension falls back to")
     func provisioningAuditExplainsMissingExtension() {
         let rootProfile = profile(name: "Root", appID: "TEAM.com.resigned.demo",
                                   groups: ["group.resolved.shared"])
@@ -115,9 +115,11 @@ struct MobileCharacterizationTests {
             deviceIdentifier: "DEVICE"
         )
 
-        #expect(!audit.isReady)
-        #expect(audit.rows.last?.state == .missingProfile)
-        #expect(audit.firstBlockingMessage?.contains("com.resigned.demo.shield") == true)
+        #expect(audit.isReady)
+        #expect(audit.rows.last?.state == .selectedProfileFallback)
+        #expect(audit.rows.last?.profileID == rootProfile.id)
+        #expect(audit.rows.last?.detail.contains("this app extension") == true)
+        #expect(audit.firstBlockingMessage == nil)
     }
 
     @Test("Removing extensions keeps the established single-profile fallback")
@@ -354,7 +356,7 @@ struct MobileCharacterizationTests {
         #expect(message.contains("not a provisioning-profile mismatch"))
     }
 
-    @Test("Manual audit blocks a missing extension profile")
+    @Test("Manual audit signs an extension with the app profile")
     func provisioningAuditBlocksMissingExtension() {
         let rootProfile = profile(name: "Root", appID: "TEAM.com.resigned.demo",
                                   groups: ["group.resolved.shared"])
@@ -368,12 +370,12 @@ struct MobileCharacterizationTests {
             deviceIdentifier: "DEVICE"
         )
 
-        #expect(!audit.isReady)
-        #expect(audit.rows.last?.state == .missingProfile)
+        #expect(audit.isReady)
+        #expect(audit.rows.last?.state == .selectedProfileFallback)
         #expect(audit.firstBlockingMessage(includeNested: false) == nil)
         #expect(audit.selectedProfileIDs == [rootProfile.id])
-        // The UI offers "Sign Without App Extensions"; with that on, it signs.
-        #expect(audit.onlyExtensionsBlocked)
+        // Nothing blocks now, so "Sign Without App Extensions" is not offered.
+        #expect(!audit.onlyExtensionsBlocked)
         let withoutExtensions = ProvisioningAuditService.makeAudit(
             inspection: inspectionWithExtension(),
             profiles: [rootProfile],
@@ -756,8 +758,8 @@ struct MobileCharacterizationTests {
         }
     }
 
-    @Test("The fallback covers only the main app; extensions still need their own profile")
-    func customBundleIDFallbackSkipsExtensions() {
+    @Test("The fallback covers the main app and its app extensions")
+    func customBundleIDFallbackCoversExtensions() {
         let selected = profile(name: "Selected", appID: "TEAM.com.original.demo",
                                groups: ["group.original.shared"])
         let audit = ProvisioningAuditService.makeAudit(
@@ -766,10 +768,11 @@ struct MobileCharacterizationTests {
             requestedBundleID: "com.forgetest.apple",
             removeExtensions: false, deviceIdentifier: "DEVICE"
         )
-        #expect(!audit.isReady)
+        #expect(audit.isReady)
         #expect(audit.rows.first?.state == .selectedProfileFallback)
-        #expect(audit.rows.last?.state == .missingProfile)
-        #expect(audit.onlyExtensionsBlocked)
+        #expect(audit.rows.last?.state == .selectedProfileFallback)
+        #expect(audit.selectedProfileIDs == [selected.id])
+        #expect(!audit.onlyExtensionsBlocked)
 
         let withoutExtensions = ProvisioningAuditService.makeAudit(
             inspection: inspectionWithExtension(), profiles: [selected],

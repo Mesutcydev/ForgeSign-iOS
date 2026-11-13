@@ -1,6 +1,11 @@
-# ForgeSign 2.8.3
+# ForgeSign 2.8.4
 
-A follow-up to 2.8.1 that lets you sign with a custom bundle ID again, restores Apple Account sign-in with community anisette servers, and lands fixes from a full code audit. 2.8.2 was never published as a release, so its changes ship here too. Everything in the 2.8 and 2.8.1 notes still applies.
+A follow-up to 2.8.3 that signs apps carrying app extensions again, and stops the Apple Account sign-in asking for a code Apple never sent. Everything in the 2.8.3 notes still applies.
+
+## What's new in 2.8.4
+
+- **Apps with extensions sign again.** An explicit App ID profile covers `TEAM.com.example.app`, never `com.example.app.Share`, so since 2.6 every IPA carrying a share extension, widget or keyboard stopped with "No imported provisioning profile matches this bundle ID" on the extension row. The app's profile now signs those extensions too, with that profile's entitlements, so the embedded profile and the signed entitlements still agree. The extension row shows **selected profile** as a warning naming the profile used. iOS can refuse to install an app whose extension carries a profile that doesn't cover it, so a wildcard profile or Apple Account provisioning is still the clean path, and **Remove app extensions** still signs the app alone. 2.8.3 extended this fallback to the main app only; it now reaches app extensions. A Watch app or App Clip is a separate installable product and still needs its own matching profile.
+- **No more waiting for a 2FA code that was never sent.** When Apple refused to push a verification code to your trusted devices, the refusal was ignored and ForgeSign asked for the code anyway, so sign-in sat waiting for a code that would never arrive. The refusal is now reported with Apple's HTTP status. 2.8.2 added this check to the SMS path; the trusted-device path was missed.
 
 ## What's new in 2.8.3
 
@@ -17,9 +22,9 @@ A follow-up to 2.8.1 that lets you sign with a custom bundle ID again, restores 
 
 ## Validation
 
-CI on this build: dependency bootstrap from checksum-pinned sources (including the updated AltSign patch over the pinned revision), native signing invariants, simulator tests (including the custom bundle ID fallback), the device Release build, and IPA packaging/validation.
+CI on this build: dependency bootstrap from checksum-pinned sources (including the updated AltSign patch over the pinned revision), native signing invariants, simulator tests (including the extension fallback), the device Release build, and IPA packaging/validation. The 2.8.4 provisioning change was also run against real Apple-issued profiles on the host.
 
-Apple Account sign-in and 2FA (trusted device and SMS), refresh-as-upgrade, signing and installing a custom bundle ID with the selected profile, and OTA installation on a registered device remain to be verified on hardware.
+Apple Account sign-in and 2FA (trusted device and SMS), refresh-as-upgrade, signing and installing a custom bundle ID with the selected profile, installing an app whose extensions carry the app's profile, and OTA installation on a registered device remain to be verified on hardware.
 
 ## Download
 
@@ -27,4 +32,4 @@ The IPA is **unsigned**. Sign it with your own certificate and matching provisio
 
 [Download the latest IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)
 
-`ForgeSign-2.8.3.ipa` and `ForgeSign-latest.ipa` contain the same build: **2.8.3 (34)**. SHA-256 checksums are attached to this release.
+`ForgeSign-2.8.4.ipa` and `ForgeSign-latest.ipa` contain the same build: **2.8.4 (35)**. SHA-256 checksums are attached to this release.
