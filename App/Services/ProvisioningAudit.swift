@@ -3,9 +3,9 @@ import Foundation
 enum ProvisioningCheckState: Equatable, Sendable {
     case ready
     case warning
-    /// The main app has a custom bundle ID that no imported profile covers,
-    /// so the selected profile signs it (zsign's root fallback for a
-    /// re-bundled app). Every other profile check still applies.
+    /// The main app's bundle ID is not covered by any imported profile, so
+    /// the selected profile signs it (zsign's root fallback for a re-bundled
+    /// or otherwise unmatched app). Every other profile check still applies.
     case selectedProfileFallback
     case removed
     case missingProfile
@@ -103,11 +103,12 @@ enum ProvisioningAuditService {
                                certificate: certificate,
                                deviceIdentifier: deviceIdentifier,
                                now: now)
-            // A custom bundle ID that no imported profile covers keeps the
-            // established manual path: the native signer uses the first
-            // supplied profile for the main app (never for nested bundles).
+            // A bundle ID that no imported profile covers keeps the v2.1
+            // manual path: the native signer uses the selected profile for
+            // the main app, and every other check on that profile still has
+            // to pass. Watch apps and App Clips are separate products and
+            // still need their own profile.
             if bundle.kind == .app,
-               rootResolvedID != rootOriginalID,
                result.state == .missingProfile,
                result.profileID == nil,
                let preferredProfileID,
