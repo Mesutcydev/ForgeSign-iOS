@@ -359,11 +359,22 @@ bool ZBundle::SignNode(jvalue& jvNode, ZSignAsset* pDefaultAsset)
 				bestExplicit = explicitMatch;
 			}
 		}
-		if (bestAsset) signAsset = bestAsset;
-		else if (strFolder != "/") {
-			m_strError = "No provisioning profile matches " + strBundleId + " (" + strFolder + "). Import a matching profile or use Apple Account provisioning.";
-			ZLog::ErrorV(">>> %s\n", m_strError.c_str());
-			return false;
+		if (bestAsset) {
+			signAsset = bestAsset;
+		} else if (strFolder != "/") {
+			// An app extension with no profile of its own keeps the app's
+			// asset: its profile and its entitlements, which stay consistent
+			// with each other. An explicit App ID profile never covers
+			// <app>.<child>, so failing here stopped every extension-bearing
+			// IPA from signing. A Watch app or App Clip is a separate
+			// installable product and still needs a profile of its own.
+			if (!ZFile::IsPathSuffix(strFolder, ".appex") ||
+				!signAsset || signAsset->m_strProvData.empty()) {
+				m_strError = "No provisioning profile matches " + strBundleId + " (" + strFolder + "). Import a matching profile or use Apple Account provisioning.";
+				ZLog::ErrorV(">>> %s\n", m_strError.c_str());
+				return false;
+			}
+			ZLog::PrintV(">>> No matching profile for %s; using the app profile.\n", strBundleId.c_str());
 		}
 	}
 	if (jvNode.has("files")) {
@@ -801,7 +812,10 @@ bool ZBundle::ApplyProvisioningMetadata()
 			}
 		}
 		if (!bestAsset) {
-			if (bundlePath != m_strAppFolder) {
+			// The app's profile also stands in for an app extension no
+			// explicit App ID profile can cover (see SignNode). A Watch app
+			// or App Clip still needs a profile of its own.
+			if (bundlePath != m_strAppFolder && !ZFile::IsPathSuffix(bundlePath, ".appex")) {
 				m_strError = "No provisioning profile matches " + bundleId + " (" +
 					bundlePath.substr(m_strAppFolder.size() + 1) + "). Import a matching profile or use Apple Account provisioning.";
 				ZLog::ErrorV(">>> %s\n", m_strError.c_str());

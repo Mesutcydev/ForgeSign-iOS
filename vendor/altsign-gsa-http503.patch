@@ -1,8 +1,7 @@
 diff --git a/AltSign/Apple API/ALTAppleAPI.h b/AltSign/Apple API/ALTAppleAPI.h
-index 5ad1e17..4ecfcf7 100644
---- a/AltSign/Apple API/ALTAppleAPI.h	
-+++ b/AltSign/Apple API/ALTAppleAPI.h	
-@@ -28,6 +28,10 @@ NS_ASSUME_NONNULL_BEGIN
+--- a/AltSign/Apple API/ALTAppleAPI.h
++++ b/AltSign/Apple API/ALTAppleAPI.h
+@@ -28,6 +28,10 @@
  
  @property (class, nonatomic, readonly) ALTAppleAPI *sharedAPI;
  
@@ -14,10 +13,9 @@ index 5ad1e17..4ecfcf7 100644
  - (void)fetchTeamsForAccount:(ALTAccount *)account session:(ALTAppleAPISession *)session
             completionHandler:(void (^)(NSArray<ALTTeam *> *_Nullable teams, NSError *_Nullable error))completionHandler;
 diff --git a/AltSign/Sources/ALTAppleAPI+Authentication.swift b/AltSign/Sources/ALTAppleAPI+Authentication.swift
-index 2d3e50c..329ab7c 100644
 --- a/AltSign/Sources/ALTAppleAPI+Authentication.swift
 +++ b/AltSign/Sources/ALTAppleAPI+Authentication.swift
-@@ -37,22 +37,17 @@ public extension ALTAppleAPI
+@@ -37,22 +37,17 @@
          
          do
          {
@@ -46,7 +44,21 @@ index 2d3e50c..329ab7c 100644
              ] as [String: Any]
              
              let context = GSAContext(username: sanitizedAppleID, password: password)
-@@ -307,21 +302,23 @@ private extension ALTAppleAPI
+@@ -244,6 +239,13 @@
+             do
+             {
+                 guard error == nil else { throw error! }
++                // This response was ignored, so a refused request still asked
++                // for a code Apple had never sent to anything.
++                if let httpResponse = response as? HTTPURLResponse, !(200 ..< 300).contains(httpResponse.statusCode)
++                {
++                    let message = String(format: NSLocalizedString("Apple would not send a verification code to your trusted devices (HTTP %ld).", comment: ""), httpResponse.statusCode)
++                    throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: message])
++                }
+                 
+                 func responseHandler(verificationCode: String?)
+                 {
+@@ -307,21 +309,23 @@
                                   verificationHandler: @escaping (@escaping (String?) -> Void) -> Void,
                                   completionHandler: @escaping (Result<Void, Error>) -> Void)
      {
@@ -78,7 +90,7 @@ index 2d3e50c..329ab7c 100644
              request.httpBody = bodyData
          }
          catch
-@@ -334,6 +331,11 @@ private extension ALTAppleAPI
+@@ -334,6 +338,11 @@
              do
              {
                  guard error == nil else { throw error! }
@@ -90,7 +102,7 @@ index 2d3e50c..329ab7c 100644
                  
                  func responseHandler(verificationCode: String?)
                  {
-@@ -343,16 +345,16 @@ private extension ALTAppleAPI
+@@ -343,16 +352,16 @@
                          
                          var request = self.makeTwoFactorCodeRequest(url: verifyURL, dsid: dsid, idmsToken: idmsToken, anisetteData: anisetteData)
                          request.httpMethod = "POST"
@@ -114,7 +126,7 @@ index 2d3e50c..329ab7c 100644
                          request.httpBody = bodyData
                          
                          let verifyCodeTask = self.session.dataTask(with: request) { (data, response, error) in
-@@ -432,11 +434,16 @@ private extension ALTAppleAPI
+@@ -432,11 +441,16 @@
                  "Request": requestParameters
              ]
              
@@ -133,7 +145,7 @@ index 2d3e50c..329ab7c 100644
              ]
              
              let bodyData = try PropertyListSerialization.data(fromPropertyList: parameters, format: .xml, options: 0)
-@@ -445,45 +452,96 @@ private extension ALTAppleAPI
+@@ -445,45 +459,96 @@
              request.httpMethod = "POST"
              request.httpBody = bodyData
              httpHeaders.forEach { request.addValue($0.value, forHTTPHeaderField: $0.key) }
@@ -226,27 +238,27 @@ index 2d3e50c..329ab7c 100644
 +                        }
 +                        return
 +                    }
-+                }
+                 }
 +
 +                let message: String
 +                if let httpResponse = httpResponse {
 +                    message = String(format: NSLocalizedString("Apple's authentication servers returned an unexpected response (HTTP %ld). Please try again.", comment: ""), httpResponse.statusCode)
 +                } else {
 +                    message = NSLocalizedString("Apple's authentication servers returned an unexpected response. Please try again.", comment: "")
-                 }
++                }
 +                throw URLError(.badServerResponse, userInfo: [NSLocalizedDescriptionKey: message])
-+            }
-+            catch
-+            {
-+                completionHandler(.failure(error))
              }
 -            
 -            dataTask.resume()
--        }
++            catch
++            {
++                completionHandler(.failure(error))
++            }
+         }
 -        catch
 -        {
 -            completionHandler(.failure(error))
-         }
+-        }
 +        dataTask.resume()
      }
 -    
@@ -254,7 +266,7 @@ index 2d3e50c..329ab7c 100644
      func makeTwoFactorCodeRequest(url: URL,
                                    dsid: String,
                                    idmsToken: String,
-@@ -495,12 +553,13 @@ private extension ALTAppleAPI
+@@ -495,12 +560,13 @@
          let encodedIdentityToken = identityTokenData.base64EncodedString()
          
          let httpHeaders = [

@@ -3,9 +3,9 @@ import Foundation
 enum ProvisioningCheckState: Equatable, Sendable {
     case ready
     case warning
-    /// The main app has a custom bundle ID that no imported profile covers,
-    /// so the selected profile signs it (zsign's root fallback for a
-    /// re-bundled app). Every other profile check still applies.
+    /// The main app's bundle ID is not covered by any imported profile, so
+    /// the selected profile signs it (zsign's root fallback for a re-bundled
+    /// or otherwise unmatched app). Every other profile check still applies.
     case selectedProfileFallback
     case removed
     case missingProfile
@@ -103,11 +103,12 @@ enum ProvisioningAuditService {
                                certificate: certificate,
                                deviceIdentifier: deviceIdentifier,
                                now: now)
-            // A custom bundle ID that no imported profile covers keeps the
-            // established manual path: the native signer uses the first
-            // supplied profile for the main app (never for nested bundles).
+            // A bundle ID that no imported profile covers keeps the v2.1
+            // manual path: the native signer uses the selected profile for
+            // the main app, and every other check on that profile still has
+            // to pass. Watch apps and App Clips are separate products and
+            // still need their own profile.
             if bundle.kind == .app,
-               rootResolvedID != rootOriginalID,
                result.state == .missingProfile,
                result.profileID == nil,
                let preferredProfileID,
@@ -122,6 +123,9 @@ enum ProvisioningAuditService {
             return result
         }
 
+        reuseAppProfileForExtensions(in: &rows, bundles: inspection.bundles,
+                                     profiles: profiles, certificate: certificate,
+                                     deviceIdentifier: deviceIdentifier, now: now)
         enforceSharedAppGroups(in: &rows)
 
         // Keep the root profile first, then stable bundle order.
@@ -268,7 +272,9 @@ enum ProvisioningAuditService {
                                                 noMatchRow: ProvisioningAuditRow,
                                                 certificate: CertificateRecord?,
                                                 deviceIdentifier: String?,
-                                                now: Date) -> ProvisioningAuditRow {
+                                                now: Date,
+                                                subject: String = "the app",
+                                                extraDetail: String = "") -> ProvisioningAuditRow {
         let evaluation = evaluate(profile: profile, bundle: bundle,
                                   resolvedBundleID: resolvedBundleID,
                                   certificate: certificate,
@@ -282,9 +288,10 @@ enum ProvisioningAuditService {
 
         let appID = profile.applicationIdentifier.map { " (\($0))" } ?? ""
         var detail = "No imported profile matches this bundle ID, so the selected profile "
-            + "“\(profile.displayName)”\(appID) will sign the app. iOS can refuse to install an app "
+            + "“\(profile.displayName)”\(appID) will sign \(subject). iOS can refuse to install an app "
             + "whose bundle ID its profile doesn't cover; a wildcard profile or Apple Account "
             + "provisioning avoids that."
+        if !extraDetail.isEmpty { detail += " " + extraDetail }
         let warnings = unconfirmedCoverage(profile: profile, bundle: bundle,
                                            deviceIdentifier: deviceIdentifier)
         if !warnings.isEmpty {
@@ -292,6 +299,40 @@ enum ProvisioningAuditService {
         }
         return row(bundle: bundle, resolvedBundleID: resolvedBundleID,
                    state: .selectedProfileFallback, detail: detail, profile: profile)
+    }
+
+    /// An explicit App ID profile never covers `<app>.<child>`, so an app
+    /// extension usually has no profile of its own. zsign then signs it with
+    /// the app's profile and that profile's entitlements, which keeps the
+    /// embedded profile and the signed entitlements consistent; without this
+    /// no extension-bearing IPA could be signed at all. A Watch app or App
+    /// Clip is a separate installable product and still needs its own profile.
+    /// ponytail: iOS can still refuse the install, so the row says so instead
+    /// of claiming the extension will work.
+    private static func reuseAppProfileForExtensions(in rows: inout [ProvisioningAuditRow],
+                                                     bundles: [SignableBundleInspection],
+                                                     profiles: [ProfileRecord],
+                                                     certificate: CertificateRecord?,
+                                                     deviceIdentifier: String?,
+                                                     now: Date) {
+        guard let appRow = rows.first(where: { $0.kind == .app }),
+              !appRow.state.isBlocking,
+              let appProfileID = appRow.profileID,
+              let appProfile = profiles.first(where: { $0.id == appProfileID }) else { return }
+        for index in rows.indices
+        where rows[index].kind == .extension
+            && rows[index].state == .missingProfile
+            && rows[index].profileID == nil {
+            let current = rows[index]
+            guard let bundle = bundles.first(where: { $0.path == current.path }) else { continue }
+            rows[index] = selectedProfileFallback(
+                appProfile, bundle: bundle,
+                resolvedBundleID: current.resolvedBundleID,
+                noMatchRow: current, certificate: certificate,
+                deviceIdentifier: deviceIdentifier, now: now,
+                subject: "this app extension",
+                extraDetail: "Remove app extensions to sign the app alone instead.")
+        }
     }
 
     private static func enforceSharedAppGroups(in rows: inout [ProvisioningAuditRow]) {

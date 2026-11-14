@@ -255,10 +255,10 @@ final class AltServerClient: ObservableObject {
             if let host = connection.resolvedHost,
                let fallback = Self.httpURL(host: host, port: 6969) {
                 do {
-                    let json = try await AnisetteHTTPClient.fetch(
-                        from: fallback,
-                        clientDescription: AnisettePayload.compatibilityClientDescription
-                    )
+                    // The server's own headers carry the identity its anisette
+                    // data belongs to; forcing one here made GrandSlam answer
+                    // HTTP 503.
+                    let json = try await AnisetteHTTPClient.fetch(from: fallback)
                     lastSource = .altServerHost
                     lastRemoteServerName = nil
                     return json
