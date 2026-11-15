@@ -31,6 +31,7 @@ int forgesign_sign_ipa_profiles(const char* ipaPath,
                                 int removeExtensions,
                                 int enableDocuments,
                                 int matchAppEntitlements,
+                                int removeWatchApp,
                                 char* msgBuf,
                                 int msgBufLen,
                                 char* bundleIdBuf,
@@ -86,6 +87,7 @@ int forgesign_inject_dylib_ipa(const char* ipaPath,
                                char* msgBuf,
                                int msgBufLen);
 
+int forgesign_take_log(char* buf, int bufLen);
 const char* forgesign_zsign_version(void);
 
 #ifdef __cplusplus

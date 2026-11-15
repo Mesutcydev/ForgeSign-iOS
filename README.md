@@ -141,6 +141,15 @@ installed as an upgrade so app data survives.
   claimed: a sideloaded app cannot rely on `BGTaskScheduler`, and ForgeSign does
   not pretend otherwise.
 
+## What’s new in 2.8.7
+
+- **Signing log.** Every sign attempt is recorded on the device, including failures before the engine runs. **View Signing Log** shows it under any failure or warning.
+- **Sign Without Watch App.** When a Watch app with no profile blocks a sign, the Watch app is removed from that signed IPA, which then does not install it.
+- **Extensions with the app's profile verify**, and every sealed file and the bundle ID are checked after signing.
+- **Safer data and installs.** Unreadable indexes are moved aside, not overwritten. The install server requires a per-install token. Remote anisette gets per-server provisioning data.
+
+Validated with 93 simulator tests and a generated-fixture signing check.
+
 ## What’s new in 2.8.6
 
 - **Clear fix when an App Group blocks signing.** When the profile you picked does not grant an App Group the app declares, the error now names the groups, says to turn them off to sign, and offers **Sign Without App Groups**. The signed app loses access to its shared group data. Validated with 86 simulator tests.

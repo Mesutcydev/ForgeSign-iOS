@@ -288,7 +288,8 @@ final class RepositoryStore: ObservableObject {
             defer { session.invalidateAndCancel() }
             let (data, http) = try await readCatalog(req, using: session)
             guard (200...299).contains(http.statusCode) else {
-                fetchError[repo.id] = "The repository server returned an error."
+                // The status is shown so the cause can be told apart (audit U8).
+                fetchError[repo.id] = "The repository server returned an error (HTTP \(http.statusCode)). Try again later."
                 return
             }
             let source = try JSONDecoder().decode(RepoSource.self, from: data)
@@ -302,7 +303,7 @@ final class RepositoryStore: ObservableObject {
                 save()
             }
         } catch {
-            fetchError[repo.id] = error.localizedDescription
+            fetchError[repo.id] = UserFacingError.message(for: error)
         }
     }
 
@@ -352,32 +353,22 @@ final class RepositoryStore: ObservableObject {
         } catch is CancellationError {
             // The cancelled partial is removed by the transfer; GET is available again.
         } catch {
-            downloadError = error.localizedDescription
+            downloadError = UserFacingError.message(for: error)
         }
     }
 
     private func readCatalog(_ request: URLRequest,
                              using session: URLSession) async throws -> (Data, HTTPURLResponse) {
-        let (bytes, response) = try await session.bytes(for: request)
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse,
               let finalURL = response.url,
               NetworkPolicy.validateHTTPS(finalURL) else {
             throw NetworkError.invalidResponse
         }
-        let expected = response.expectedContentLength
-        guard expected <= Int64(Self.maximumCatalogBytes) || expected == NSURLSessionTransferSizeUnknown else {
+        // The size is checked as the body arrives in full. An oversized catalog is
+        // refused before anything is parsed (audit N11).
+        guard data.count <= Self.maximumCatalogBytes else {
             throw NetworkError.catalogTooLarge
-        }
-
-        var data = Data()
-        if expected > 0 {
-            data.reserveCapacity(Int(expected))
-        }
-        for try await byte in bytes {
-            guard data.count < Self.maximumCatalogBytes else {
-                throw NetworkError.catalogTooLarge
-            }
-            data.append(byte)
         }
         return (data, http)
     }

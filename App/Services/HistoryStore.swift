@@ -56,6 +56,7 @@ final class HistoryStore: ObservableObject {
 
     let signedDir: URL
     private let indexURL: URL
+    private var canPersist = true
 
     init(baseDirectory: URL? = nil) {
         let base = baseDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -198,12 +199,13 @@ final class HistoryStore: ObservableObject {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: indexURL),
-              let stored = try? JSONDecoder().decode([SigningRecord].self, from: data) else { return }
-        records = stored
+        let loaded = ProtectedPersistence.loadIndex([SigningRecord].self, from: indexURL)
+        canPersist = loaded.safeToSave
+        records = loaded.value ?? []
     }
 
     private func save() {
+        guard canPersist else { return }
         if let data = try? JSONEncoder().encode(records) {
             try? ProtectedPersistence.write(data, to: indexURL)
         }

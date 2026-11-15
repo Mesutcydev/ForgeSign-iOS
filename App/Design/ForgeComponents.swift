@@ -244,7 +244,7 @@ struct SigningAssetRow: View {
         .buttonStyle(GlassTactileButtonStyle())
         .accessibilityLabel(label)
         .accessibilityValue([value ?? "not selected", status].compactMap { $0 }.joined(separator: ", "))
-        .accessibilityHint("Double-tap to choose a file.")
+        .accessibilityHint("Double-tap to open.")
     }
 }
 

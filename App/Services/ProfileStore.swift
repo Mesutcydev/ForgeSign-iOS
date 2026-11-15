@@ -122,6 +122,7 @@ final class ProfileStore: ObservableObject {
 
     private let dir: URL
     private let indexURL: URL
+    private var canPersist = true
     private var refreshTask: Task<Void, Never>?
 
     private struct RefreshResult: Sendable {
@@ -249,8 +250,9 @@ final class ProfileStore: ObservableObject {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: indexURL),
-              let index = try? JSONDecoder().decode(Index.self, from: data) else { return }
+        let loaded = ProtectedPersistence.loadIndex(Index.self, from: indexURL)
+        canPersist = loaded.safeToSave
+        guard let index = loaded.value else { return }
         // Load the cached records synchronously so the UI can render quickly.
         // Authenticity checks and profile parsing are refreshed off the main
         // actor below.
@@ -315,6 +317,7 @@ final class ProfileStore: ObservableObject {
     }
 
     private func save() {
+        guard canPersist else { return }
         let index = Index(profiles: profiles, selectedID: selectedID)
         if let data = try? JSONEncoder().encode(index) {
             try? ProtectedPersistence.write(data, to: indexURL)

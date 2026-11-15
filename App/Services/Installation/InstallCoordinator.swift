@@ -71,6 +71,8 @@ final class InstallCoordinator: ObservableObject {
     @Published private(set) var phase: InstallationPhase = .idle
     @Published private(set) var statusMessage = ""
     @Published private(set) var lastError: String?
+    /// False for a failure that retrying cannot fix, such as a missing IPA (audit U19).
+    @Published private(set) var canRetry = false
 
     let controller: InstallController
 
@@ -96,12 +98,13 @@ final class InstallCoordinator: ObservableObject {
         }
         lastRequest = (ipa, bundleId, version, recordID)
         lastError = nil
+        canRetry = false
         guard FileManager.default.fileExists(atPath: ipa.path) else {
-            apply(InstallationProgress(phase: .failed(""), message: "The signed IPA is no longer in the Library."))
+            reportPermanentFailure("The signed IPA is no longer in the Library.")
             return
         }
         guard !bundleId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            apply(InstallationProgress(phase: .failed(""), message: "The signed IPA has no bundle identifier to install."))
+            reportPermanentFailure("The signed IPA has no bundle identifier to install.")
             return
         }
         controller.install(ipa: ipa, bundleId: bundleId, version: version, recordID: recordID)
@@ -123,12 +126,24 @@ final class InstallCoordinator: ObservableObject {
         phase = .idle
         statusMessage = ""
         lastError = nil
+        canRetry = false
         lastRequest = nil
+    }
+
+    /// A failure that retrying cannot fix. It is shown, but Try Again is not offered (audit U19).
+    private func reportPermanentFailure(_ message: String) {
+        phase = .failed("")
+        statusMessage = message
+        lastError = message
+        canRetry = false
     }
 
     private func apply(_ progress: InstallationProgress) {
         phase = progress.phase
         statusMessage = progress.message
-        if case .failed = progress.phase { lastError = progress.message }
+        if case .failed = progress.phase {
+            lastError = progress.message
+            canRetry = true
+        }
     }
 }

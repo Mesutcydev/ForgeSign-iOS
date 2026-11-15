@@ -29,6 +29,8 @@ enum NetworkPolicy {
               url.user == nil,
               url.password == nil,
               url.fragment == nil else { return false }
+        // Literal names only. Hosts are not resolved, so a name that points at a private
+        // network is not refused here; catalog hosts are chosen by the user (audit N9).
         let blockedHosts = ["localhost", "127.0.0.1", "::1"]
         return !blockedHosts.contains(host.lowercased())
     }

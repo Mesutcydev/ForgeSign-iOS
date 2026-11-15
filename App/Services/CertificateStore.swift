@@ -25,6 +25,7 @@ final class CertificateStore: ObservableObject {
 
     private let dir: URL
     private let indexURL: URL
+    private var canPersist = true
     /// Keychain reads are synchronous IPC and the Sign screen asks on every
     /// redraw, so lookups are memoised per certificate. Every write or delete
     /// of a password goes through this store and invalidates its entry.
@@ -68,6 +69,13 @@ final class CertificateStore: ObservableObject {
     func select(_ id: UUID?) {
         selectedID = id
         save()
+    }
+
+    /// Drops remembered passwords from memory. Called when the app leaves the
+    /// foreground; the next sign reads them from the Keychain again (audit S8).
+    func clearPasswordCache() {
+        passwordCache.removeAll()
+        passwordMisses.removeAll()
     }
 
     private func forgetCachedPassword(for id: UUID) {
@@ -195,14 +203,16 @@ final class CertificateStore: ObservableObject {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: indexURL),
-              let index = try? JSONDecoder().decode(Index.self, from: data) else { return }
+        let loaded = ProtectedPersistence.loadIndex(Index.self, from: indexURL)
+        canPersist = loaded.safeToSave
+        guard let index = loaded.value else { return }
         certificates = index.certificates.filter { FileManager.default.fileExists(atPath: fileURL(for: $0).path) }
         selectedID = index.selectedID
         if selectedID == nil { selectedID = certificates.first?.id }
     }
 
     private func save() {
+        guard canPersist else { return }
         let index = Index(certificates: certificates, selectedID: selectedID)
         if let data = try? JSONEncoder().encode(index) {
             try? ProtectedPersistence.write(data, to: indexURL)
@@ -221,16 +231,24 @@ final class CertificateStore: ObservableObject {
 enum PasswordVault {
     private static let service = "com.forgesign.mobile.p12"
 
+    /// Adds the password, or replaces it in place. The saved item is never
+    /// deleted first, so a failed write cannot lose the password already stored
+    /// (audit S8).
     static func save(_ password: String, for id: UUID) -> Bool {
-        delete(for: id)
-        let query: [String: Any] = [
+        let match: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: id.uuidString,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            kSecValueData as String: Data(password.utf8)
+            kSecAttrAccount as String: id.uuidString
         ]
-        return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
+        var query = match
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        query[kSecValueData as String] = Data(password.utf8)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        if status == errSecDuplicateItem {
+            let update: [String: Any] = [kSecValueData as String: Data(password.utf8)]
+            return SecItemUpdate(match as CFDictionary, update as CFDictionary) == errSecSuccess
+        }
+        return status == errSecSuccess
     }
 
     static func password(for id: UUID) -> String? {

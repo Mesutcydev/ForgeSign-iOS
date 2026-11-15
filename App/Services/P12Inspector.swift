@@ -109,7 +109,7 @@ enum P12Inspector {
         let interval = notAfter.timeIntervalSince(now)
         if interval <= 0 {
             let days = Int(-interval / 86_400)
-            return (days < 1 ? "expired" : "expired \(days)d", .bad)
+            return (days < 1 ? "expired" : "expired \(days)d ago", .bad)
         }
         if interval < 3_600 * 24 {
             let hours = max(1, Int(interval / 3_600))

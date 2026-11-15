@@ -25,10 +25,7 @@ struct RemoteAnisetteServer: Identifiable, Hashable, Sendable {
     var id: String { address }
 
     var url: URL? {
-        guard let url = URL(string: address),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              let host = url.host, !host.isEmpty else { return nil }
+        guard let url = URL(string: address), AnisettePreference.isAcceptableServerURL(url) else { return nil }
         return url
     }
 
@@ -36,9 +33,7 @@ struct RemoteAnisetteServer: Identifiable, Hashable, Sendable {
 
     init?(name: String, address: String) {
         let trimmedAddress = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmedAddress),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
+        guard let url = URL(string: trimmedAddress), AnisettePreference.isAcceptableServerURL(url),
               let host = url.host, !host.isEmpty else { return nil }
         self.name = name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? host : name
         self.address = trimmedAddress
@@ -97,7 +92,7 @@ enum RemoteAnisetteCatalog {
         var request = URLRequest(url: publishedListURL)
         request.timeoutInterval = 15
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        guard let (data, response) = try? await session.data(for: request),
+        guard let (data, response) = try? await BoundedAnisetteRead.data(for: request, using: session),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return servers(fromPublishedList: data)
     }
@@ -198,7 +193,11 @@ struct AnisetteDeviceIdentity: Sendable, Equatable {
 enum AnisetteIdentityStore {
     private static let service = "com.forgesign.mobile.remote-anisette"
     private static let identityAccount = "device-identity"
-    private static let provisioningAccount = "adi-pb"
+
+    /// One provisioning blob per server: a blob from one server is never sent to another (audit N2).
+    private static func provisioningAccount(for base: URL) -> String {
+        "adi-pb-" + (base.host ?? "unknown").lowercased()
+    }
 
     static func loadOrCreateIdentity() -> AnisetteDeviceIdentity {
         if let data = read(account: identityAccount),
@@ -210,23 +209,25 @@ enum AnisetteIdentityStore {
         return identity
     }
 
-    static func cachedProvisioningBlob() -> Data? {
-        read(account: provisioningAccount)
+    static func cachedProvisioningBlob(for base: URL) -> Data? {
+        read(account: provisioningAccount(for: base))
     }
 
-    static func storeProvisioningBlob(_ data: Data) {
-        write(data, account: provisioningAccount)
+    static func storeProvisioningBlob(_ data: Data, for base: URL) {
+        write(data, account: provisioningAccount(for: base))
     }
 
-    static func clearProvisioningBlob() {
-        delete(account: provisioningAccount)
+    static func clearProvisioningBlob(for base: URL) {
+        delete(account: provisioningAccount(for: base))
     }
 
     /// Wipes the identity and its provisioning blob. The next fetch starts fresh,
     /// which is what a server-side identity reset requires.
     static func reset() {
         delete(account: identityAccount)
-        delete(account: provisioningAccount)
+        for server in RemoteAnisetteCatalog.available() {
+            if let base = server.url { delete(account: provisioningAccount(for: base)) }
+        }
     }
 
     private static func read(account: String) -> Data? {
@@ -242,7 +243,8 @@ enum AnisetteIdentityStore {
         return item as? Data
     }
 
-    private static func write(_ data: Data, account: String) {
+    @discardableResult
+    private static func write(_ data: Data, account: String) -> Bool {
         delete(account: account)
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -251,7 +253,11 @@ enum AnisetteIdentityStore {
             kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
             kSecValueData as String: data
         ]
-        SecItemAdd(query as CFDictionary, nil)
+        let status = SecItemAdd(query as CFDictionary, nil)
+        if status != errSecSuccess {
+            ForgeLog.event("Could not save \(account) to the Keychain (status \(status)).")
+        }
+        return status == errSecSuccess
     }
 
     private static func delete(account: String) {
@@ -327,11 +333,11 @@ enum RemoteAnisetteClient {
         let client = try await fetchClientInformation(from: base, serverName: serverName)
         let identity = AnisetteIdentityStore.loadOrCreateIdentity()
 
-        var cachedBlob = AnisetteIdentityStore.cachedProvisioningBlob()
+        var cachedBlob = AnisetteIdentityStore.cachedProvisioningBlob(for: base)
         if cachedBlob == nil {
             let blob = try await provision(against: base, clientInfo: client.clientInfo,
                                            userAgent: client.userAgent, identity: identity)
-            AnisetteIdentityStore.storeProvisioningBlob(blob)
+            AnisetteIdentityStore.storeProvisioningBlob(blob, for: base)
             cachedBlob = blob
         }
         guard let blob = cachedBlob else {
@@ -345,10 +351,10 @@ enum RemoteAnisetteClient {
         } catch let error as RemoteAnisetteError {
             // A stale blob after a server reset is recoverable: re-provision once.
             guard case .invalidResponse = error else { throw error }
-            AnisetteIdentityStore.clearProvisioningBlob()
+            AnisetteIdentityStore.clearProvisioningBlob(for: base)
             let fresh = try await provision(against: base, clientInfo: client.clientInfo,
                                             userAgent: client.userAgent, identity: identity)
-            AnisetteIdentityStore.storeProvisioningBlob(fresh)
+            AnisetteIdentityStore.storeProvisioningBlob(fresh, for: base)
             let json = try await headers(from: base, identity: identity, provisioningBlob: fresh,
                                          serverName: serverName, fallbackClientInfo: client.clientInfo)
             return (json, client.userAgent)
@@ -619,7 +625,7 @@ enum RemoteAnisetteClient {
 
     private static func send(_ request: URLRequest, serverName: String) async throws -> (Data, HTTPURLResponse) {
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await BoundedAnisetteRead.data(for: request, using: session)
             guard let http = response as? HTTPURLResponse else {
                 throw RemoteAnisetteError.invalidResponse("the server did not send an HTTP response.")
             }

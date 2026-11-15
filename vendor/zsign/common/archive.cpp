@@ -245,6 +245,16 @@ bool Zip::_ReadFileFromZip(void* hZip, const string& strPath, const string& strR
 		return false;
 	}
 
+	// The bytes written must match the size the archive declares. A declared
+	// 1 KB entry that inflates to gigabytes is corrupt or crafted (audit S5).
+	unz_file_info64 fileInfo;
+	if (UNZ_OK != unzGetCurrentFileInfo64(hZip, &fileInfo, NULL, 0, NULL, 0, NULL, 0)) {
+		unzCloseCurrentFile(hZip);
+		return false;
+	}
+	const uint64_t uDeclaredSize = fileInfo.uncompressed_size;
+	uint64_t uWritten = 0;
+
 	FILE* fp = NULL;
 	_fopen64(fp, strFile.c_str(), "wb");
 	if (NULL == fp) {
@@ -258,13 +268,14 @@ bool Zip::_ReadFileFromZip(void* hZip, const string& strPath, const string& strR
 	if (NULL != pbuff) {
 		int32_t nReaded = unzReadCurrentFile(hZip, pbuff, uBufSize);
 		while (nReaded > 0) {
-			if ((size_t)nReaded != fwrite(pbuff, 1, (size_t)nReaded, fp)) {
+			if ((size_t)nReaded != fwrite(pbuff, 1, (size_t)nReaded, fp)
+				|| (uWritten += (size_t)nReaded) > uDeclaredSize) {
 				bRet = false;
 				break;
 			}
 			nReaded = unzReadCurrentFile(hZip, pbuff, uBufSize);
 		}
-		if (nReaded < 0) {
+		if (nReaded < 0 || uWritten != uDeclaredSize) {
 			bRet = false;
 		}
 		free(pbuff);

@@ -39,6 +39,7 @@ enum AltServerProvisioningError: LocalizedError, Sendable {
     case appIDFailed(String, String)
     case appGroupFailed(String, String)
     case profileFailed(String, String)
+    case keychainWriteFailed
 
     var errorDescription: String? {
         switch self {
@@ -55,7 +56,10 @@ enum AltServerProvisioningError: LocalizedError, Sendable {
         case .appleServiceUnavailable(let detail):
             // Keep Apple's own words: a blanket "HTTP 503" hid anisette and
             // parse failures that need a different fix than "retry later".
-            return "Apple Account sign-in could not finish because Apple returned an invalid response (\(detail)). Retry later or pick another anisette source; this is not a provisioning-profile mismatch."
+            let reason = detail.hasSuffix(".") ? detail : detail + "."
+            return "Apple Account sign-in could not finish because Apple returned an invalid response. \(reason) Retry later or pick another anisette source; this is not a provisioning-profile mismatch."
+        case .keychainWriteFailed:
+            return "The Apple Account certificate could not be saved to the Keychain. Unlock the device and try again."
         case .noTeam:
             return "This Apple Account has no development team."
         case .requestedTeamUnavailable(let identifier):
@@ -91,7 +95,12 @@ final class AltServerProvisioningService: ObservableObject {
     @Published var verificationCode = ""
     @Published var isRequestingVerificationCode = false
 
+    /// Shown in the two-factor prompt, for example when no code was entered (audit U13).
+    @Published var verificationNotice: String?
     private var verificationReply: ((String?) -> Void)?
+    private var verificationPromptID: UUID?
+    /// How long a 2FA prompt waits for an answer before the sign-in is cancelled (audit N10).
+    private static let verificationTimeout: UInt64 = 5 * 60 * 1_000_000_000
 
     var statusText: String {
         switch phase {
@@ -106,6 +115,17 @@ final class AltServerProvisioningService: ObservableObject {
 
     func submitVerificationCode() {
         let value = verificationCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            // Keep the sign-in waiting: an empty Continue must not look like Cancel (audit U13).
+            verificationNotice = "Enter the six-digit code Apple sent to your trusted device."
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                guard let self, self.verificationReply != nil else { return }
+                self.isRequestingVerificationCode = true
+            }
+            return
+        }
+        verificationNotice = nil
         let reply = verificationReply
         verificationReply = nil
         verificationCode = ""
@@ -114,6 +134,7 @@ final class AltServerProvisioningService: ObservableObject {
     }
 
     func cancelVerification() {
+        verificationNotice = nil
         let reply = verificationReply
         verificationReply = nil
         verificationCode = ""
@@ -179,7 +200,9 @@ final class AltServerProvisioningService: ObservableObject {
         guard certificate.privateKey != nil, let p12 = certificate.p12Data() else {
             throw AltServerProvisioningError.certificateCreationFailed
         }
-        AltServerCertificateVault.save(p12, teamIdentifier: team.identifier)
+        guard AltServerCertificateVault.save(p12, teamIdentifier: team.identifier) else {
+            throw AltServerProvisioningError.keychainWriteFailed
+        }
 
         guard let root = request.bundles.first(where: { $0.kind == .app }) ?? request.bundles.first else {
             throw ProvisioningProviderError.noProfiles
@@ -257,8 +280,15 @@ private extension AltServerProvisioningService {
                             replyBox.call(nil)
                             return
                         }
+                        let promptID = UUID()
+                        self.verificationPromptID = promptID
                         self.verificationReply = { code in replyBox.call(code) }
                         self.isRequestingVerificationCode = true
+                        try? await Task.sleep(nanoseconds: Self.verificationTimeout)
+                        // Cancel only this prompt, and only if it is still unanswered.
+                        if self.verificationPromptID == promptID, self.isRequestingVerificationCode {
+                            self.cancelVerification()
+                        }
                     }
                 },
                 completionHandler: { account, session, error in
@@ -613,16 +643,23 @@ private final class VerificationReplyBox: @unchecked Sendable {
 private enum AltServerCertificateVault {
     private static let service = "com.forgesign.mobile.altserver-certificate"
 
-    static func save(_ data: Data, teamIdentifier: String) {
-        delete(teamIdentifier: teamIdentifier)
-        let query: [String: Any] = [
+    /// Adds the certificate, or replaces it in place. Returns false when the
+    /// Keychain refuses the write, so the caller can say so (audit N12).
+    @discardableResult
+    static func save(_ data: Data, teamIdentifier: String) -> Bool {
+        let match: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: teamIdentifier,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            kSecValueData as String: data
+            kSecAttrAccount as String: teamIdentifier
         ]
-        SecItemAdd(query as CFDictionary, nil)
+        var query = match
+        query[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        query[kSecValueData as String] = data
+        let status = SecItemAdd(query as CFDictionary, nil)
+        if status == errSecDuplicateItem {
+            return SecItemUpdate(match as CFDictionary, [kSecValueData as String: data] as CFDictionary) == errSecSuccess
+        }
+        return status == errSecSuccess
     }
 
     static func load(teamIdentifier: String) -> Data? {

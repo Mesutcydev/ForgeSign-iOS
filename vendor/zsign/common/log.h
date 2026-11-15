@@ -30,8 +30,11 @@ public:
 	static void Print(int nLevel, const char* szLog);
 	static void PrintV(int nLevel, const char* szFormat, ...);
 	static void SetLogLever(int nLogLevel) { g_nLogLevel = nLogLevel; }
+	// ForgeSign: copy every printed line into *pCapture; NULL stops the copy.
+	static void SetCapture(string* pCapture) { g_pCapture = pCapture; }
 
 private:
 	static void _Print(const char* szLog, int nColor = 0);
 	static int g_nLogLevel;
+	static string* g_pCapture;
 };

@@ -56,6 +56,13 @@ struct ProvisioningAudit: Equatable, Sendable {
         return !blocked.isEmpty && blocked.allSatisfy { $0.kind == .extension }
     }
 
+    /// True when the only blocker is a Watch app with no profile, so removing
+    /// the Watch app lets the rest of the IPA sign.
+    var onlyWatchAppBlocked: Bool {
+        let blocked = rows.filter { $0.state.isBlocking }
+        return !blocked.isEmpty && blocked.allSatisfy { $0.kind == .watchApp }
+    }
+
     /// True when the only blocker is an App Group the profile doesn't grant,
     /// so signing without App Groups lets the app sign.
     var onlyAppGroupsBlocked: Bool {
@@ -83,6 +90,7 @@ enum ProvisioningAuditService {
                           requestedBundleID: String,
                           removeExtensions: Bool,
                           ignoreAppGroups: Bool = false,
+                          removeWatchApp: Bool = false,
                           deviceIdentifier: String? = currentDeviceIdentifier,
                           now: Date = .now) -> ProvisioningAudit {
         let trimmedBundleID = requestedBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -98,7 +106,8 @@ enum ProvisioningAuditService {
             let resolvedID = resolvedBundleID(for: bundle.bundleIdentifier,
                                               rootOriginalID: rootOriginalID,
                                               rootResolvedID: rootResolvedID)
-            if removeExtensions && bundle.kind == .extension {
+            if (removeExtensions && bundle.kind == .extension)
+                || (removeWatchApp && bundle.kind == .watchApp) {
                 return ProvisioningAuditRow(path: bundle.path, kind: bundle.kind,
                                             originalBundleID: bundle.bundleIdentifier,
                                             resolvedBundleID: resolvedID,
@@ -213,7 +222,8 @@ enum ProvisioningAuditService {
         }
 
         guard profile.profileIsAuthentic else {
-            return makeRow(.missingProfile, "Profile “\(profile.displayName)” failed authenticity validation.")
+            // The check verifies the profile's signature structure. It does not prove Apple issued it (audit S3).
+            return makeRow(.missingProfile, "Profile “\(profile.displayName)” failed structure validation: its signature does not verify.")
         }
         if let expiry = certificate?.notAfter, expiry.timeIntervalSince(now) <= 0 {
             return makeRow(.expired, "The selected signing certificate has expired.")
@@ -272,6 +282,12 @@ enum ProvisioningAuditService {
         }
         if !bundle.entitlementsAvailable {
             warnings.append("original entitlement metadata is unavailable")
+        }
+        if profile.provisionsAllDevices != true && deviceIdentifier == nil && !profile.provisionedDevices.isEmpty {
+            warnings.append("this device's identifier is unknown, so its membership is not checked")
+        }
+        if profile.developerCertificateSHA256.isEmpty {
+            warnings.append("the profile lists no developer certificates, so the signing certificate is not checked")
         }
         return warnings
     }

@@ -79,11 +79,27 @@ struct LoopbackInstallServerTests {
         let server = LocalInstallServer()
         let port = try await server.start(ipa: file, bundleId: "com.example.test", bundleVersion: "1", title: "Test")
         defer { server.stop() }
-        let response = try await request(port: port, text: "GET /app.ipa HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: bytes=8192-196607\r\n\r\n")
+        let response = try await request(port: port, text: "GET /\(server.installToken)/app.ipa HTTP/1.1\r\nHost: 127.0.0.1\r\nRange: bytes=8192-196607\r\n\r\n")
         let boundary = try #require(response.range(of: Data("\r\n\r\n".utf8)))
         let headers = String(decoding: response[..<boundary.lowerBound], as: UTF8.self)
         #expect(headers.hasPrefix("HTTP/1.1 206 Partial Content"))
         #expect(Data(response[boundary.upperBound...]) == payload.subdata(in: 8_192..<196_608))
+    }
+
+    @Test("The IPA and install page are not served without the install token")
+    func withoutTokenNotServed() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("http-\(UUID().uuidString).ipa")
+        try Data("ipa".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let server = LocalInstallServer()
+        let port = try await server.start(ipa: file, bundleId: "com.example.test", bundleVersion: "1", title: "Test")
+        defer { server.stop() }
+        let bare = try await request(port: port, text: "GET /app.ipa HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        #expect(String(decoding: bare.prefix(12), as: UTF8.self) == "HTTP/1.1 404")
+        let install = try await request(port: port, text: "GET /install HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        #expect(String(decoding: install.prefix(12), as: UTF8.self) == "HTTP/1.1 404")
+        let withToken = try await request(port: port, text: "GET /\(server.installToken)/app.ipa HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        #expect(String(decoding: withToken.prefix(12), as: UTF8.self) == "HTTP/1.1 200")
     }
 
     @Test("Stopping an active transfer does not send the remaining IPA")
@@ -98,7 +114,7 @@ struct LoopbackInstallServerTests {
         let server = LocalInstallServer()
         let port = try await server.start(ipa: file, bundleId: "com.example.test", bundleVersion: "1", title: "Test")
         defer { server.stop() }
-        let response = try await request(port: port, text: "GET /app.ipa HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n") {
+        let response = try await request(port: port, text: "GET /\(server.installToken)/app.ipa HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n") {
             server.stop()
         }
         let boundary = try #require(response.range(of: Data("\r\n\r\n".utf8)))

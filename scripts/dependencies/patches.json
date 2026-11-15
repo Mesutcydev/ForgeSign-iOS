@@ -1,0 +1,14 @@
+{
+  "altsign_gsa_http503": {
+    "file": "vendor/altsign-gsa-http503.patch",
+    "sha256": "26820c293a5b32e72361dfb3b619845bd159dfa34444e1299f58d7c1a095bb59"
+  },
+  "altsign_compatibility": {
+    "file": "scripts/dependencies/altsign-compatibility.patch",
+    "sha256": "293f989592e840d507a83a9b9576ed5cd762566f72010b1c39d072d145c1bc5f"
+  },
+  "openssl_initializer": {
+    "file": "scripts/dependencies/openssl_init.c",
+    "sha256": "a2ee35e7468e8b504a6475a52859f73e2e3a9aea2c75e5347b195e051fb2cbdc"
+  }
+}

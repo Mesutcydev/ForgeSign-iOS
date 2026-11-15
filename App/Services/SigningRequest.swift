@@ -6,6 +6,8 @@ struct SigningRequest: Sendable {
     struct Profile: Sendable {
         let url: URL
         let name: String
+        /// Re-checked here: the background metadata refresh can change it after the audit (audit S11).
+        var isAuthentic: Bool = true
     }
     let ipa: URL
     let p12: URL
@@ -19,6 +21,7 @@ struct SigningRequest: Sendable {
     let matchAppEntitlements: Bool
     let dylib: URL?
     let injectIntoExtensions: Bool
+    var removeWatchApp: Bool = false
 }
 
 struct SignedOutput: Sendable {
@@ -38,8 +41,40 @@ enum SigningWorker {
 
     static func run(_ request: SigningRequest) async -> Result<SignedOutput, SigningFailure> {
         await withCheckedContinuation { continuation in
-            queue.async { continuation.resume(returning: perform(request)) }
+            queue.async {
+                _ = SigningService.takeLog()  // drop output left by an earlier attempt
+                let outcome = perform(request)
+                record(request, outcome, zsignLog: SigningService.takeLog())
+                continuation.resume(returning: outcome)
+            }
         }
+    }
+
+    /// Writes one record per sign attempt to the signing log: the settings,
+    /// the engine's output and the outcome. The certificate password is never written.
+    private static func record(_ request: SigningRequest,
+                               _ outcome: Result<SignedOutput, SigningFailure>,
+                               zsignLog: String) {
+        let bundle = request.bundleID.isEmpty ? "unchanged" : request.bundleID
+        let profiles = request.profiles.map(\.name).joined(separator: ", ")
+        var lines = [
+            "=== Sign \(request.ipa.lastPathComponent) at \(ForgeLog.timestamp()) ===",
+            "Bundle ID: \(bundle)",
+            "Profiles: \(profiles)",
+            "Options: remove extensions \(request.removeExtensions), remove Watch app \(request.removeWatchApp), "
+                + "Files import \(request.enableDocuments), own entitlements \(request.matchAppEntitlements), "
+                + "dylib \(request.dylib != nil)",
+            zsignLog.isEmpty
+                ? "Engine: no output, the attempt stopped before the signing engine ran."
+                : "Engine output:\n" + zsignLog.trimmingCharacters(in: .newlines),
+        ]
+        switch outcome {
+        case .success(let signed):
+            lines.append("Result: signed \(signed.bundleID) \(signed.version)")
+        case .failure(let failure):
+            lines.append("Result: failed: \(failure.message)")
+        }
+        ForgeLog.append(lines.joined(separator: "\n") + "\n\n")
     }
 
     private static func perform(_ request: SigningRequest) -> Result<SignedOutput, SigningFailure> {
@@ -51,6 +86,9 @@ enum SigningWorker {
         defer {
             try? FileManager.default.removeItem(at: partial)
             try? FileManager.default.removeItem(at: injected)
+        }
+        for profile in request.profiles where !profile.isAuthentic {
+            return .failure(SigningFailure(message: "Profile “\(profile.name)” failed validation. Re-import it, then try again."))
         }
         for profile in request.profiles {
             let validation = SigningService.validateSigningAsset(p12: request.p12, password: request.password, profile: profile.url)
@@ -73,9 +111,13 @@ enum SigningWorker {
             ipa: input, p12: request.p12, password: request.password, profiles: request.profiles.map(\.url),
             bundleId: request.bundleID, output: partial, tempDir: request.temporaryDirectory,
             removeExtensions: request.removeExtensions, enableDocuments: request.enableDocuments,
-            matchAppEntitlements: request.matchAppEntitlements
+            matchAppEntitlements: request.matchAppEntitlements,
+            removeWatchApp: request.removeWatchApp
         )
         guard result.ok else { return .failure(SigningFailure(message: result.message)) }
+        if !request.bundleID.isEmpty && result.signedBundleId != request.bundleID {
+            return .failure(SigningFailure(message: "The signed app has bundle ID \(result.signedBundleId), not \(request.bundleID). Nothing was saved."))
+        }
         let verification = SigningService.verify(ipa: partial, temporaryDirectory: request.temporaryDirectory)
         guard verification.ok else { return .failure(SigningFailure(message: verification.message)) }
         do {
