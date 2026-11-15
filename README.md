@@ -141,6 +141,26 @@ installed as an upgrade so app data survives.
   claimed: a sideloaded app cannot rely on `BGTaskScheduler`, and ForgeSign does
   not pretend otherwise.
 
+## How to use
+
+**1. Add your signing materials.** Under **Certificates**, import a `.p12` with its password (*Remember password in Keychain* is on by default). Under **Profiles**, import a `.mobileprovision`. Or skip both and turn on **Use Apple Account provisioning** (see below).
+
+**2. Choose the IPA.** Pick an `.ipa` or `.zip` from Files, or download one in **Sources** with **GET**; a download opens here already chosen.
+
+**3. Set the options you need.** *New bundle ID* is optional. *Remove app extensions* and *Enable Files import / sharing* are off by default; turn them on only when you need them.
+
+**4. Read the Preflight card.** It lists the bundle, the profile and the certificate, and any blocker that would stop the sign.
+
+**5. Tap Sign IPA.** If a notice appears, use the button it offers: *Sign Without App Extensions*, *Sign Without App Groups* or *Sign Without Watch App*. Each applies to that one attempt. Otherwise import the matching profile. **View Signing Log** shows every attempt and its result; copy or share it when reporting a problem.
+
+**6. Install from Library.** A signed IPA appears in **Library**. Tap it for **Install on Device** or **Share / Save IPA**.
+
+**Apple Account provisioning.** Turn on *Use Apple Account provisioning*, then enter your Apple Account email and password and the device UDID. Pick an *Anisette source*; *Test anisette source* checks it. If several AltServers are on your network, choose one. A team the account cannot use is replaced by the account's own team, and the signing log records the switch. Apple's two-factor code is entered in a prompt; the prompt cancels itself after five minutes.
+
+## What’s new in 2.8.8
+
+- **Apple Account provisioning uses your account’s own team** when the imported certificate belongs to a team the signed-in Apple Account cannot use, and the signing log records the switch.
+
 ## What’s new in 2.8.7
 
 - **Signing log.** Every sign attempt is recorded on the device, including failures before the engine runs. **View Signing Log** shows it under any failure or warning.

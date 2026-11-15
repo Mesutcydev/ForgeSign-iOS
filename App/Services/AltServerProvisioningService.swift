@@ -175,12 +175,15 @@ final class AltServerProvisioningService: ObservableObject {
                                                         password: password,
                                                         anisetteData: anisette)
         let teams = try await fetchTeams(account: account, session: session)
-        if let requestedTeamID = request.teamIdentifier,
-           !teams.contains(where: { $0.identifier.caseInsensitiveCompare(requestedTeamID) == .orderedSame }) {
-            throw AltServerProvisioningError.requestedTeamUnavailable(requestedTeamID)
-        }
         guard let team = preferredTeam(from: teams, requestedTeamID: request.teamIdentifier) else {
             throw AltServerProvisioningError.noTeam
+        }
+        if let requestedTeamID = request.teamIdentifier,
+           team.identifier.caseInsensitiveCompare(requestedTeamID) != .orderedSame {
+            // The imported certificate belongs to a team this Apple Account cannot use.
+            // Provision in the account's own team. The imported certificate is reused only
+            // if that team actually holds it (prepareCertificate matches serial numbers).
+            ForgeLog.event("Team \(requestedTeamID) is not available to this Apple Account, so provisioning uses team \(team.identifier).")
         }
         let deviceType: ALTDeviceType = UIDevice.current.userInterfaceIdiom == .pad ? .ipad : .iphone
 

@@ -1,4 +1,24 @@
-# ForgeSign 2.8.7
+# ForgeSign 2.8.8
+
+A follow-up to 2.8.7 for Apple Account provisioning when the imported certificate belongs to a team the signed-in Apple Account cannot use.
+
+## What's new in 2.8.8
+
+- **Apple Account provisioning uses your account's own team.** Previously, when the imported certificate's team was not available to the signed-in Apple Account, provisioning stopped with "Team … is not available to this Apple Account". It now provisions in the account's own team and records that switch in the signing log. The imported certificate is reused only if that team actually holds it. If the team already has a development certificate ForgeSign has no key for, the existing conflict message still appears, and ForgeSign does not revoke that certificate.
+
+## Validation
+
+Simulator tests: 93 in 10 suites. The device Release build, IPA packaging and IPA validation ran on this build. Installing the signed app on a registered device still needs hardware verification.
+
+## Download
+
+The IPA is **unsigned**. Sign it with your own certificate and matching provisioning profile before installing.
+
+[Download the latest IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)
+
+`ForgeSign-2.8.8.ipa` and `ForgeSign-latest.ipa` contain the same build: **2.8.8 (39)**. SHA-256 checksums are attached to this release.
+
+## ForgeSign 2.8.7
 
 A follow-up to 2.8.6 that makes a failed sign explainable, adds a way past a Watch app that has no profile, and tightens signing and install safety after a full audit. Everything in the 2.8.6 notes still applies.
 
@@ -14,13 +34,13 @@ A follow-up to 2.8.6 that makes a failed sign explainable, adds a way past a Wat
 - **Clearer messages and controls.** Missing App Groups and Watch apps say what to do, and system errors read in plain words. Results and errors no longer linger after new input. Touch targets are at least 44 pt, and the light-mode status colours meet 4.5:1 contrast.
 - **Release integrity.** A published release is never replaced by a different build, and the release notes cover only the version being published.
 
-## Validation
+### Validation for 2.8.7
 
 Simulator tests: 93 in 10 suites, including the signing log, index recovery, Watch app removal, the install token and the anisette changes. The signing fixture generates a certificate, profiles, an app with an extension, a framework and a resource, signs and verifies them, and rejects a tampered output. The Python packaging and dependency tests and the shell signer tests pass. The device Release build and IPA validation ran on this build.
 
 Not yet verified on a device: installing a signed app, Apple Account sign-in with two-factor authentication, and the new interface on screen.
 
-## Download
+### Download for 2.8.7
 
 The IPA is **unsigned**. Sign it with your own certificate and matching provisioning profile before installing.
 
