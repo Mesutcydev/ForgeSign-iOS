@@ -2,6 +2,7 @@
 #include "bundle.h"
 #include "openssl.h"
 #include "archive.h"
+#include "base64.h"
 #include "macho.h"
 #include "log.h"
 #include <string>
@@ -12,6 +13,7 @@
 #include <openssl/x509.h>
 #include <openssl/evp.h>
 #include <openssl/cms.h>
+#include <openssl/err.h>
 
 using namespace std;
 
@@ -23,7 +25,7 @@ static string FSReadPlistString(const string& path, const string& key)
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
     fseek(f, 0, SEEK_SET);
-    if (sz <= 0) { fclose(f); return ""; }
+    if (sz <= 0 || sz > 16L * 1024 * 1024) { fclose(f); return ""; }
     vector<uint8_t> buf(sz);
     size_t rd = fread(buf.data(), 1, sz, f);
     fclose(f);
@@ -40,9 +42,10 @@ static string FSReadPlistString(const string& path, const string& key)
         CFStringRef cfkey = CFStringCreateWithCString(NULL, key.c_str(), kCFStringEncodingUTF8);
         CFTypeRef val = CFDictionaryGetValue((CFDictionaryRef)plist, cfkey);
         if (val && CFStringGetTypeID() == CFGetTypeID(val)) {
-            char tmp[1024];
-            if (CFStringGetCString((CFStringRef)val, tmp, sizeof(tmp), kCFStringEncodingUTF8)) {
-                result = tmp;
+            CFIndex capacity = CFStringGetMaximumSizeForEncoding(CFStringGetLength((CFStringRef)val), kCFStringEncodingUTF8) + 1;
+            vector<char> tmp((size_t)capacity);
+            if (CFStringGetCString((CFStringRef)val, tmp.data(), capacity, kCFStringEncodingUTF8)) {
+                result = tmp.data();
             }
         }
         CFRelease(cfkey);
@@ -238,6 +241,27 @@ static bool FSValidateExtractedIPA(const string& folder, string& appFolder, stri
 // Signs an IPA using zsign (userspace codesign) with a .p12 + password + profile.
 // Returns 0 on success, non-zero on failure. Writes a short status message into
 // msgBuf (NUL-terminated) for the UI.
+// ForgeSign: zsign's output for the last signing call. FSLogCapture routes it
+// here while the call runs; forgesign_take_log hands it to the app.
+static string g_fsSignLog;
+
+// OpenSSL keeps its failure reasons on a per-thread stack. Drain it into the
+// same log so a failed certificate or profile check shows why.
+static int FSAppendOpenSSLError(const char* text, size_t len, void* out)
+{
+    static_cast<string*>(out)->append(text, len);
+    return 1;
+}
+
+struct FSLogCapture {
+    // No clear here: validation runs first in the same attempt, and its output must stay.
+    FSLogCapture() { ZLog::SetCapture(&g_fsSignLog); }
+    ~FSLogCapture() {
+        ERR_print_errors_cb(FSAppendOpenSSLError, &g_fsSignLog);
+        ZLog::SetCapture(NULL);
+    }
+};
+
 static int FS_SignIPA(const char* ipaPath,
                       const char* p12Path,
                       const char* password,
@@ -248,6 +272,7 @@ static int FS_SignIPA(const char* ipaPath,
                       int removeExtensions,
                       int enableDocuments,
                       int matchAppEntitlements,
+                      int removeWatchApp,
                       char* msgBuf,
                       int msgBufLen,
                       char* bundleIdBuf,
@@ -261,7 +286,8 @@ static int FS_SignIPA(const char* ipaPath,
         }
     };
 
-    ZLog::SetLogLever(ZLog::E_WARN);
+    FSLogCapture logCapture;
+    ZLog::SetLogLever(ZLog::E_INFO);
 
     string strIpa = ipaPath ? ipaPath : "";
     string strP12 = p12Path ? p12Path : "";
@@ -335,7 +361,7 @@ static int FS_SignIPA(const char* ipaPath,
     ZBundle bundle;
     bundle.m_bEnableDocuments = (enableDocuments != 0);
     bundle.m_bRemoveExtensions = (removeExtensions != 0);
-    bundle.m_bRemoveWatchApp = false;
+    bundle.m_bRemoveWatchApp = (removeWatchApp != 0);
     bundle.m_bRemoveUISupportedDevices = false;
     bundle.m_bInjectExtensions = false;
 
@@ -358,12 +384,22 @@ static int FS_SignIPA(const char* ipaPath,
     // Report the signed bundle identifier and version (needed for the install manifest).
     if (bundleIdBuf && bundleIdBufLen > 0) {
         string signedId = FSReadPlistString(bundle.m_strAppFolder + "/Info.plist", "CFBundleIdentifier");
+        if (signedId.size() >= (size_t)bundleIdBufLen) {
+            ZFile::RemoveFolder(strFolder.c_str());
+            setMsg("The signed bundle ID is too long to report.");
+            return 15;
+        }
         snprintf(bundleIdBuf, bundleIdBufLen, "%s", signedId.c_str());
     }
     if (versionBuf && versionBufLen > 0) {
         string signedVersion = FSReadPlistString(bundle.m_strAppFolder + "/Info.plist", "CFBundleVersion");
         if (signedVersion.empty()) {
             signedVersion = FSReadPlistString(bundle.m_strAppFolder + "/Info.plist", "CFBundleShortVersionString");
+        }
+        if (signedVersion.size() >= (size_t)versionBufLen) {
+            ZFile::RemoveFolder(strFolder.c_str());
+            setMsg("The signed version string is too long to report.");
+            return 15;
         }
         snprintf(versionBuf, versionBufLen, "%s", signedVersion.c_str());
     }
@@ -406,7 +442,7 @@ extern "C" int forgesign_sign_ipa(const char* ipaPath,
                                    int versionBufLen)
 {
     return FS_SignIPA(ipaPath, p12Path, password, provPath, bundleId, outputPath, tempFolder,
-                      removeExtensions, enableDocuments, 0, msgBuf, msgBufLen,
+                      removeExtensions, enableDocuments, 0, 0, msgBuf, msgBufLen,
                       bundleIdBuf, bundleIdBufLen, versionBuf, versionBufLen);
 }
 
@@ -420,6 +456,7 @@ extern "C" int forgesign_sign_ipa_profiles(const char* ipaPath,
                                             int removeExtensions,
                                             int enableDocuments,
                                             int matchAppEntitlements,
+                                            int removeWatchApp,
                                             char* msgBuf,
                                             int msgBufLen,
                                             char* bundleIdBuf,
@@ -428,7 +465,7 @@ extern "C" int forgesign_sign_ipa_profiles(const char* ipaPath,
                                             int versionBufLen)
 {
     return FS_SignIPA(ipaPath, p12Path, password, profilePaths, bundleId, outputPath, tempFolder,
-                      removeExtensions, enableDocuments, matchAppEntitlements, msgBuf, msgBufLen,
+                      removeExtensions, enableDocuments, matchAppEntitlements, removeWatchApp, msgBuf, msgBufLen,
                       bundleIdBuf, bundleIdBufLen, versionBuf, versionBufLen);
 }
 
@@ -787,6 +824,71 @@ static void FSCopyNameEntry(X509_NAME* name, int nid, char* buf, int len)
     OPENSSL_free(utf8);
 }
 
+// ForgeSign: recomputes the seal of one signed bundle. Every file its
+// CodeResources lists must still hash to the values recorded there, so a changed
+// file under a sealed bundle is rejected (audit S2). `files` holds SHA-1 only and
+// covers files such as the root Info.plist; `files2` holds SHA-1 and SHA-256. The
+// main executable is sealed by the code directory, which this check does not recompute.
+static bool FSSealedDigestMatches(const string& bundleFolder, const string& relative,
+                                  const string& storedSHA1, const string& storedSHA256, bool checkSHA256,
+                                  string& failure)
+{
+    string sha1Base64, sha256Base64;
+    if (!ZSHA::SHABase64File((bundleFolder + "/" + relative).c_str(), sha1Base64, sha256Base64)) {
+        failure = "A sealed file is missing: " + relative;
+        return false;
+    }
+    jbase64 codec;
+    string sha1Raw, sha256Raw;
+    codec.decode(sha1Base64.c_str(), sha1Raw);
+    codec.decode(sha256Base64.c_str(), sha256Raw);
+    if (storedSHA1 != sha1Raw || (checkSHA256 && storedSHA256 != sha256Raw)) {
+        failure = "A sealed file changed after signing: " + relative;
+        return false;
+    }
+    return true;
+}
+
+static bool FSCodeResourcesMatchFiles(const string& bundleFolder, string& failure)
+{
+    jvalue seal;
+    if (!seal.read_plist_from_file("%s/_CodeSignature/CodeResources", bundleFolder.c_str()) ||
+        !seal.has("files2") || !seal["files2"].is_object()) {
+        failure = "Missing or unreadable seal";
+        return false;
+    }
+    vector<string> sealedFiles;
+    seal["files2"].get_keys(sealedFiles);
+    for (const string& relative : sealedFiles) {
+        jvalue& entry = seal["files2"][relative.c_str()];
+        string storedSHA1, storedSHA256;
+        if (!entry.is_object() || !entry.has("hash") || !entry.has("hash2") ||
+            !entry["hash"].as_data(storedSHA1) || !entry["hash2"].as_data(storedSHA256)) {
+            failure = "Malformed seal entry for " + relative;
+            return false;
+        }
+        if (!FSSealedDigestMatches(bundleFolder, relative, storedSHA1, storedSHA256, true, failure)) {
+            return false;
+        }
+    }
+    if (seal.has("files") && seal["files"].is_object()) {
+        vector<string> legacyFiles;
+        seal["files"].get_keys(legacyFiles);
+        for (const string& relative : legacyFiles) {
+            if (seal["files2"].has(relative.c_str())) continue;  // already checked above
+            string storedSHA1;
+            if (!seal["files"][relative.c_str()].as_data(storedSHA1)) {
+                failure = "Malformed seal entry for " + relative;
+                return false;
+            }
+            if (!FSSealedDigestMatches(bundleFolder, relative, storedSHA1, string(), false, failure)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 extern "C" int forgesign_verify_ipa(const char* ipaPath,
                                       const char* tempFolder,
                                       char* msgBuf,
@@ -843,6 +945,7 @@ extern "C" int forgesign_verify_ipa(const char* ipaPath,
             }
             return false;
         });
+        const string rootBundleID = FSReadPlistString(appFolder + "/Info.plist", "CFBundleIdentifier");
         for (const string& bundlePath : provisionedBundles) {
             if (!ZFile::IsFileExists((bundlePath + "/_CodeSignature/CodeResources").c_str())) {
                 ok = false;
@@ -867,7 +970,15 @@ extern "C" int forgesign_verify_ipa(const char* ipaPath,
             const bool profileMatches = !applicationIdentifier.empty() &&
                 FSProfilePatternMatches(applicationIdentifier, bundleID);
 
-            if (!profileMatches && bundlePath != appFolder) {
+            // zsign signs an extension without an App ID profile of its own with the
+            // app's profile (the 2.8.4 behaviour). Accept that only for a dotted child
+            // of the app's bundle ID, and only when the profile is the app's (audit S1).
+            const bool extensionUsesAppProfile = !profileMatches &&
+                ZFile::IsPathSuffix(bundlePath, ".appex") &&
+                !rootBundleID.empty() && bundleID.size() > rootBundleID.size() + 1 &&
+                bundleID.compare(0, rootBundleID.size() + 1, rootBundleID + ".") == 0 &&
+                FSProfilePatternMatches(applicationIdentifier, rootBundleID);
+            if (!profileMatches && !extensionUsesAppProfile && bundlePath != appFolder) {
                 ok = false;
                 failure = "Embedded profile does not match " + bundleID + ".";
                 break;
@@ -878,6 +989,13 @@ extern "C" int forgesign_verify_ipa(const char* ipaPath,
             // behavior here: profile identity matching is advisory for the
             // verifier, while missing/invalid profiles and invalid signatures
             // remain hard failures above.
+
+            string sealFailure;
+            if (!FSCodeResourcesMatchFiles(bundlePath, sealFailure)) {
+                ok = false;
+                failure = sealFailure + " (" + (bundlePath == appFolder ? string("app") : bundlePath.substr(appFolder.size() + 1)) + ").";
+                break;
+            }
 
             jvalue info;
             if (!info.read_plist_from_file("%s/Info.plist", bundlePath.c_str())) {
@@ -1067,6 +1185,7 @@ extern "C" int forgesign_validate_signing_asset(const char* p12Path,
     auto setMsg = [&](const string& message) {
         if (msgBuf && msgBufLen > 0) snprintf(msgBuf, msgBufLen, "%s", message.c_str());
     };
+    FSLogCapture capture;
     if (!p12Path || !profilePath) {
         setMsg("The certificate or provisioning profile is missing.");
         return 1;
@@ -1084,4 +1203,16 @@ extern "C" int forgesign_validate_signing_asset(const char* p12Path,
 extern "C" const char* forgesign_zsign_version(void)
 {
     return "zsign-embedded";
+}
+
+// ForgeSign: hands the app the zsign output from the last signing call and
+// clears it. Returns the full length; the copy is cut to bufLen - 1 bytes.
+extern "C" int forgesign_take_log(char* buf, int bufLen)
+{
+    string text;
+    text.swap(g_fsSignLog);
+    if (buf && bufLen > 0) {
+        snprintf(buf, bufLen, "%s", text.c_str());
+    }
+    return (int)text.size();
 }

@@ -134,6 +134,7 @@ final class RefreshSourceStore: ObservableObject {
 
     let directory: URL
     private let manifestURL: URL
+    private var canPersist = true
     private let budget: Int64
     @Published private var entries: [Entry]
     @Published private(set) var isRetaining = false
@@ -159,8 +160,9 @@ final class RefreshSourceStore: ObservableObject {
         self.manifestURL = base.appendingPathComponent("manifest.json")
         self.budget = budget
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        entries = (try? Data(contentsOf: manifestURL))
-            .flatMap { try? JSONDecoder().decode([Entry].self, from: $0) } ?? []
+        let loaded = ProtectedPersistence.loadIndex([Entry].self, from: manifestURL)
+        canPersist = loaded.safeToSave
+        entries = loaded.value ?? []
     }
 
     var totalBytes: Int64 { entries.reduce(0) { $0 + $1.byteCount } }
@@ -259,16 +261,29 @@ final class RefreshSourceStore: ObservableObject {
         return (removed, failedNames.count)
     }
 
-    /// Oldest first, until the budget fits. Never keeps more than the budget.
+    /// Oldest first, until the budget fits. Files in the folder that no entry
+    /// tracks (for example after an unreadable manifest was moved aside) are
+    /// removed once they are old enough not to be a copy still in progress, so
+    /// the folder cannot grow past the budget unnoticed (audit S4).
     func prune() {
         while totalBytes > budget, let oldest = entries.min(by: { $0.addedAt < $1.addedAt }) {
             try? FileManager.default.removeItem(at: directory.appendingPathComponent(oldest.filename))
             entries.removeAll { $0.recordID == oldest.recordID }
         }
+        let tracked = Set(entries.map(\.filename))
+        let cutoff = Date().addingTimeInterval(-3600)
+        for url in StorageUsage.files(in: directory, extensions: ["ipa"])
+        where !tracked.contains(url.lastPathComponent) && storedBytes > budget {
+            let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            if let modified, modified < cutoff {
+                try? FileManager.default.removeItem(at: url)
+            }
+        }
+        save()
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(entries) else { return }
+        guard canPersist, let data = try? JSONEncoder().encode(entries) else { return }
         try? ProtectedPersistence.write(data, to: manifestURL)
     }
 }

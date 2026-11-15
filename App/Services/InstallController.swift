@@ -150,14 +150,17 @@ final class InstallController: ObservableObject {
                 let manifestSession = NetworkPolicy.makeValidatedSession()
                 defer { manifestSession.invalidateAndCancel() }
                 let (plistData, plistResp) = try await manifestSession.data(from: plistURL)
-                guard self.operation?.id == id,
-                      (plistResp as? HTTPURLResponse)?.statusCode == 200,
-                      NetworkPolicy.manifestIsValid(plistData,
-                                                    packageURL: server.payloadURL,
-                                                    bundleID: bundleId,
-                                                    version: version) else {
+                // Reachability first: a manifest that does not match is a different problem (audit N11).
+                guard self.operation?.id == id, (plistResp as? HTTPURLResponse)?.statusCode == 200 else {
                     throw NSError(domain: "forgesign.install", code: 3,
-                                  userInfo: [NSLocalizedDescriptionKey: "Remote manifest server unavailable. Check network and retry."])
+                                  userInfo: [NSLocalizedDescriptionKey: "Could not reach the install manifest server. Check the network and retry."])
+                }
+                // ForgeSign checks the manifest it requested. iOS fetches its own copy through
+                // itms-services, so this check does not bind the install (audit N1).
+                guard NetworkPolicy.manifestIsValid(plistData, packageURL: server.payloadURL,
+                                                    bundleID: bundleId, version: version) else {
+                    throw NSError(domain: "forgesign.install", code: 5,
+                                  userInfo: [NSLocalizedDescriptionKey: "The install manifest does not match this app. Retry; if it repeats, the manifest server is returning different data."])
                 }
 
                 failureContext = "opening the iOS installer"
@@ -184,7 +187,7 @@ final class InstallController: ObservableObject {
             } catch is CancellationError {
                 self.finish(id: id, status: "Install cancelled.")
             } catch {
-                self.finish(id: id, status: "Install failed while \(failureContext): \(error.localizedDescription)")
+                self.finish(id: id, status: "Install failed while \(failureContext): \(UserFacingError.message(for: error))")
             }
         }
         operation?.task = task
@@ -239,7 +242,7 @@ final class InstallController: ObservableObject {
 
     func openInstallPage() {
         guard let server = installServer else { return }
-        guard let page = URL(string: "\(server.installBaseURL)/install") else { return }
+        guard let page = URL(string: "\(server.installBaseURL)/\(server.installToken)/install") else { return }
         installStatus = "Opening the Safari install page. Tap Install there to continue."
         emit(.awaitingSystem, installStatus)
         let id = operation?.id

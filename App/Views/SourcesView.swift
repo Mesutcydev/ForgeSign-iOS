@@ -256,6 +256,11 @@ struct RepoDetailSheet: View {
             loadingState
         } else if let error = store.fetchError[repo.id] {
             message(icon: "exclamationmark.triangle", error)
+            GlassSecondaryButton(label: "Try Again", systemImage: "arrow.clockwise") {
+                Task { await store.refresh(repo) }
+            }
+            .padding(.horizontal, T.pad)
+            .padding(.top, 12)
         }
     }
 
@@ -375,7 +380,10 @@ struct RepoDetailSheet: View {
                     }
             }
             .buttonStyle(GlassTactileButtonStyle())
+            .frame(minHeight: 44)
             .disabled(app.downloadURL == nil || store.activeDownloadID != nil || store.pendingIPA != nil)
+            .accessibilityLabel("Get \(app.name)")
+            .accessibilityHint(app.downloadURL == nil ? "This app has no download link." : "")
         }
     }
 }

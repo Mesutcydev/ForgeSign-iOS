@@ -73,7 +73,15 @@ struct CertificatesSheet: View {
                     Text("The .p12 file and its saved Keychain password are removed from this device.")
                 }
                 .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
-                    guard case .success(let urls) = result, let url = urls.first else { return }
+                    let url: URL
+                    switch result {
+                    case .success(let urls):
+                        guard let first = urls.first else { return }
+                        url = first
+                    case .failure(let failure):
+                        error = failure.localizedDescription
+                        return
+                    }
                     guard ["p12", "pfx"].contains(url.pathExtension.lowercased()) else {
                         error = "Choose a .p12 or .pfx certificate."
                         return

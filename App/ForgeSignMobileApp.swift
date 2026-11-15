@@ -10,6 +10,11 @@ struct ForgeSignMobileApp: App {
     @StateObject private var imports = ImportRouter()
     @StateObject private var refreshSources = RefreshSourceStore()
     @StateObject private var signer = SigningService()
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        ProtectedPersistence.sweepTemporaryImports()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -24,6 +29,9 @@ struct ForgeSignMobileApp: App {
                 .environmentObject(refreshSources)
                 .environmentObject(signer)
                 .onOpenURL { imports.receive($0) }
+                .onChange(of: scenePhase) { phase in
+                    if phase != .active { certificates.clearPasswordCache() }
+                }
         }
     }
 }

@@ -54,6 +54,12 @@ class PackagingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly one app"):
             validate_ipa(self.source)
 
+    def test_rejects_debug_dylibs(self):
+        (self.app / "ForgeSign.debug.dylib").write_bytes(b"debug build")
+        with self.assertRaisesRegex(ValueError, "Debug dylibs"):
+            package_app(self.app, self.source)
+            validate_ipa(self.source)
+
     def test_rejects_traversal(self):
         package_app(self.app, self.source)
         with zipfile.ZipFile(self.source, "a") as archive:

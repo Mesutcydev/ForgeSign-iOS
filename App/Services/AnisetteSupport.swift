@@ -205,17 +205,41 @@ enum OnDeviceAnisette {
     }
 }
 
+/// Reads at most `limit` bytes of an anisette response. A peer that sends more is
+/// cut off instead of being buffered in memory (audit N4).
+enum BoundedAnisetteRead {
+    static let limit = 1_048_576
+
+    static func data(for request: URLRequest, using session: URLSession) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await session.bytes(for: request)
+        if response.expectedContentLength > Int64(limit) {
+            throw URLError(.dataLengthExceedsMaximum)
+        }
+        var data = Data()
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count > limit { throw URLError(.dataLengthExceedsMaximum) }
+        }
+        return (data, response)
+    }
+}
+
 enum AnisetteHTTPClient {
     /// Ephemeral and cache-free: anisette responses carry one-time passwords,
     /// so a cached answer (or the shared cookie store) is never acceptable.
-    private static let session = URLSession(configuration: .ephemeral)
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        // A timeout on inactivity alone lets a peer that trickles bytes hold the request open (audit N4).
+        configuration.timeoutIntervalForResource = 60
+        return URLSession(configuration: configuration)
+    }()
 
     static func fetch(from url: URL, clientDescription: String? = nil) async throws -> [String: String] {
         var request = URLRequest(url: url)
         request.timeoutInterval = 12
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await BoundedAnisetteRead.data(for: request, using: session)
 
         guard let http = response as? HTTPURLResponse else {
             throw AltServerClientError.invalidResponse

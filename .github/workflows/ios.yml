@@ -19,6 +19,8 @@ jobs:
     runs-on: macos-26
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Check the tag matches the app version
         if: startsWith(github.ref, 'refs/tags/v')
@@ -46,7 +48,8 @@ jobs:
         run: xcodegen generate
 
       - name: Check formatting
-        run: git diff --check
+        # Checks the committed change against main, not an empty working tree (audit B3).
+        run: git diff --check origin/main...HEAD
 
       - name: Test IPA packaging
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
@@ -56,6 +59,13 @@ jobs:
           bash scripts/test_signer_identity.sh
           bash scripts/test_signer_resources.sh
           bash scripts/test_crypto.sh
+
+      - name: Build the bridge probe
+        run: bash scripts/build_bridge_probe.sh
+
+      - name: Sign and verify generated fixtures
+        run: |
+          FORGESIGN_OPENSSL="$(brew --prefix openssl@3)/bin/openssl" python3 scripts/test_signing_fixture.py
 
       - name: Select available simulator
         run: |
@@ -96,7 +106,11 @@ jobs:
           unzip -t build/ForgeSign-latest.ipa
           python3 scripts/package_ipa.py validate build/ForgeSign-latest.ipa
           unzip -Z1 build/ForgeSign-latest.ipa | grep -Fx 'Payload/ForgeSign.app/ForgeSign'
-          ! unzip -Z1 build/ForgeSign-latest.ipa | grep -E '\.(debug\.dylib|preview\.dylib)$'
+          listing=$(unzip -Z1 build/ForgeSign-latest.ipa)
+          if printf '%s\n' "$listing" | grep -Eq '\.(debug\.dylib|preview\.dylib)$'; then
+            echo "::error::Debug dylibs must not be packaged"
+            exit 1
+          fi
 
       - name: Upload validated unsigned IPA
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -106,19 +120,26 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # Publishes the IPA this run validated. Creates the release for the tag, or
-  # replaces its assets when the release was already drafted by hand.
+  # Publishes the IPA this run validated. A published release is never replaced
+  # (audit B1): re-running the same build is a no-op, a different build under the
+  # same version fails and the version must be bumped.
   release:
     needs: validate
     if: >-
       startsWith(github.ref, 'refs/tags/v') ||
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       actions: read
+    # One publish at a time per ref, and never cancelled midway (audit B8).
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Publish the validated IPA
         env:
@@ -129,25 +150,49 @@ jobs:
             TAG="$GITHUB_REF_NAME"
           else
             TAG="v$(python3 -c 'import plistlib; print(plistlib.load(open("Info.plist", "rb"))["CFBundleShortVersionString"])')"
-            # A manual run publishes this commit only; never re-point an
-            # existing tag.
-            if EXISTING=$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha 2>/dev/null); then
+            # A manual run may create the tag at this commit, but never moves an
+            # existing one. Only a missing tag (HTTP 404) is a reason to create it (audit B2).
+            if EXISTING=$(gh api "repos/$GH_REPO/commits/$TAG" --jq .sha 2>/tmp/tag-error); then
               if [ "$EXISTING" != "$GITHUB_SHA" ]; then
                 echo "::error::$TAG already points at $EXISTING, not $GITHUB_SHA"
                 exit 1
               fi
+            elif ! grep -q "HTTP 404" /tmp/tag-error; then
+              echo "::error::Could not read $TAG: $(cat /tmp/tag-error)"
+              exit 1
             fi
           fi
           VERSION="${TAG#v}"
+          # The build number must increase over the previous release (audit B7).
+          BUILD=$(python3 -c 'import plistlib; print(plistlib.load(open("Info.plist", "rb"))["CFBundleVersion"])')
+          PREVIOUS=$(git tag --list 'v*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)
+          if [ -n "$PREVIOUS" ] && git show "$PREVIOUS:Info.plist" > previous.plist 2>/dev/null; then
+            PREVIOUS_BUILD=$(python3 -c 'import plistlib; print(plistlib.load(open("previous.plist", "rb"))["CFBundleVersion"])')
+            if [ "$BUILD" -le "$PREVIOUS_BUILD" ]; then
+              echo "::error::Build $BUILD does not increase on $PREVIOUS ($PREVIOUS_BUILD)"
+              exit 1
+            fi
+          fi
           gh run download "$GITHUB_RUN_ID" --name ForgeSign-latest --dir release
           test -f release/ForgeSign-latest.ipa
           cp release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa"
           (cd release && shasum -a 256 ForgeSign-latest.ipa "ForgeSign-$VERSION.ipa" > SHA256SUMS.txt)
+          # Only this version's notes are published, never the whole history (audit B7).
+          python3 scripts/release_notes.py "$VERSION" --source WHATS_NEW.md --output release/notes.md
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa" release/SHA256SUMS.txt --clobber
+            mkdir -p published
+            gh release download "$TAG" --pattern SHA256SUMS.txt --dir published
+            PUBLISHED=$(awk '$2 == "ForgeSign-latest.ipa" {print $1}' published/SHA256SUMS.txt)
+            BUILT=$(awk '$2 == "ForgeSign-latest.ipa" {print $1}' release/SHA256SUMS.txt)
+            if [ -n "$PUBLISHED" ] && [ "$PUBLISHED" = "$BUILT" ]; then
+              echo "$TAG is already published with this exact build. Nothing to replace."
+            else
+              echo "::error::$TAG is already published with a different build. Bump the version instead of replacing it."
+              exit 1
+            fi
           else
             gh release create "$TAG" release/ForgeSign-latest.ipa "release/ForgeSign-$VERSION.ipa" release/SHA256SUMS.txt \
               --target "$GITHUB_SHA" \
               --title "ForgeSign $VERSION" \
-              --notes-file WHATS_NEW.md
+              --notes-file release/notes.md
           fi

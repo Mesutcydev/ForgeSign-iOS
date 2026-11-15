@@ -1,4 +1,34 @@
-# ForgeSign 2.8.6
+# ForgeSign 2.8.7
+
+A follow-up to 2.8.6 that makes a failed sign explainable, adds a way past a Watch app that has no profile, and tightens signing and install safety after a full audit. Everything in the 2.8.6 notes still applies.
+
+## What's new in 2.8.7
+
+- **A signing log you can read.** Every sign attempt is recorded on the device: its settings, the signing engine's output and the result, including failures that happen before the engine runs. Open **View Signing Log** under any failure or warning to read, copy, share or clear it. The log is protected on the device and left out of backups.
+- **Sign without a Watch app.** When a Watch app with no profile is the only thing blocking a sign, the notice offers **Sign Without Watch App**. The Watch app is removed from the signed IPA and will not be installed. The choice applies to that one attempt.
+- **Extensions signed with the app's profile verify.** An extension without a profile of its own is signed with the app's profile, as 2.8.4 described, and the output now passes verification. Extensions with their own profile are unchanged.
+- **Stronger checks on signed output.** Every sealed file is checked after signing, and the signed bundle ID must match the one you asked for. A changed file under a sealed bundle is rejected.
+- **Safer saved data.** An unreadable history, profile, certificate or refresh index is moved aside instead of being overwritten. Remembered passwords are forgotten when the app leaves the foreground, and the refresh budget counts the files on disk.
+- **Privacy in provisioning.** The Apple Account email is kept in the Keychain. Each remote anisette server gets its own provisioning data, and plain HTTP is accepted only for local network addresses. The Apple password is cleared after a successful sign-in.
+- **Safer installs.** The IPA and the install page are served only under a random per-install token, and the number of connections is limited. A two-factor prompt cancels itself after five minutes.
+- **Clearer messages and controls.** Missing App Groups and Watch apps say what to do, and system errors read in plain words. Results and errors no longer linger after new input. Touch targets are at least 44 pt, and the light-mode status colours meet 4.5:1 contrast.
+- **Release integrity.** A published release is never replaced by a different build, and the release notes cover only the version being published.
+
+## Validation
+
+Simulator tests: 93 in 10 suites, including the signing log, index recovery, Watch app removal, the install token and the anisette changes. The signing fixture generates a certificate, profiles, an app with an extension, a framework and a resource, signs and verifies them, and rejects a tampered output. The Python packaging and dependency tests and the shell signer tests pass. The device Release build and IPA validation ran on this build.
+
+Not yet verified on a device: installing a signed app, Apple Account sign-in with two-factor authentication, and the new interface on screen.
+
+## Download
+
+The IPA is **unsigned**. Sign it with your own certificate and matching provisioning profile before installing.
+
+[Download the latest IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)
+
+`ForgeSign-2.8.7.ipa` and `ForgeSign-latest.ipa` contain the same build: **2.8.7 (38)**. SHA-256 checksums are attached to this release.
+
+## ForgeSign 2.8.6
 
 A follow-up to 2.8.5 for apps whose profile does not grant the App Groups they declare. Everything in the 2.8.5 notes still applies.
 
@@ -6,11 +36,11 @@ A follow-up to 2.8.5 for apps whose profile does not grant the App Groups they d
 
 - **Clear fix when an App Group blocks signing.** If the profile you picked does not grant an App Group the app declares, Sign IPA now names those groups, says to turn them off to sign, and offers **Sign Without App Groups**. The signed app loses access to its shared group data, so features that use that data will not work. Import a profile that grants the groups to keep them. The choice covers one sign attempt; the next attempt asks again.
 
-## Validation
+### Validation for 2.8.6
 
 Simulator tests: 86 in 8 suites, including a new case for signing without App Groups. The device Release build, IPA packaging and IPA validation ran on this build. Installing the signed app on a registered device still needs hardware verification.
 
-## Download
+### Download for 2.8.6
 
 The IPA is **unsigned**. Sign it with your own certificate and matching provisioning profile before installing.
 

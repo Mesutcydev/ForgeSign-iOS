@@ -180,7 +180,9 @@ final class AltServerClient: ObservableObject {
                 guard let self else { return }
                 self.servers = discovered
                 if self.selectedServerID == nil || !discovered.contains(where: { $0.id == self.selectedServerID }) {
-                    self.selectedServerID = discovered.first?.id
+                    // One AltServer on the network is selected (and shown by name). With several,
+                    // the user chooses; nothing connects to a peer nobody picked (audit N6).
+                    self.selectedServerID = discovered.count == 1 ? discovered.first?.id : nil
                 }
             }
         }

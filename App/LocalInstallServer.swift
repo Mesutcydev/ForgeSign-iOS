@@ -100,6 +100,17 @@ final class LocalInstallServer: @unchecked Sendable {
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
+    /// A random token in every served path. A process on this device that finds
+    /// the port cannot fetch the IPA or the install page without it (audit N8).
+    let installToken: String = {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }()
+
+    /// At most this many connections are served at once; the rest wait in the backlog (audit N8).
+    private let connectionSlots = DispatchSemaphore(value: 4)
+
     private let connectionQueue = DispatchQueue(
         label: "com.forgesign.installserver.connections",
         qos: .userInitiated,
@@ -113,7 +124,7 @@ final class LocalInstallServer: @unchecked Sendable {
     }
 
     var payloadURL: String {
-        "\(installBaseURL)/app.ipa"
+        "\(installBaseURL)/\(installToken)/app.ipa"
     }
 
     /// Trusted HTTPS manifest URL (plistserver). This is what itms-services
@@ -125,7 +136,7 @@ final class LocalInstallServer: @unchecked Sendable {
             URLQueryItem(name: "bundleid", value: config.0),
             URLQueryItem(name: "name", value: config.1),
             URLQueryItem(name: "version", value: config.2),
-            URLQueryItem(name: "fetchurl", value: "http://127.0.0.1:\(config.3)/app.ipa"),
+            URLQueryItem(name: "fetchurl", value: "http://127.0.0.1:\(config.3)/\(installToken)/app.ipa"),
         ]
         return comps.url?.absoluteString ?? "https://api.palera.in/genPlist"
     }
@@ -250,7 +261,10 @@ final class LocalInstallServer: @unchecked Sendable {
                     close(client)
                     continue
                 }
+                let slots = connectionSlots
+                slots.wait()
                 connectionQueue.async { [weak self] in
+                    defer { slots.signal() }
                     guard let self else { close(client); return }
                     self.handleConnection(client)
                 }
@@ -265,7 +279,9 @@ final class LocalInstallServer: @unchecked Sendable {
 
         var buffer = Data()
         var raw = [UInt8](repeating: 0, count: 4096)
-        while buffer.count < 64 * 1024 {
+        // The whole header block must arrive within 15 s, not each read (audit N8).
+        let deadline = Date().addingTimeInterval(15)
+        while buffer.count < 64 * 1024, Date() < deadline {
             let n = recv(fd, &raw, raw.count, 0)
             if n < 0, errno == EINTR { continue }
             if n <= 0 { return }
@@ -298,14 +314,14 @@ final class LocalInstallServer: @unchecked Sendable {
         let range = LocalHTTPRange.parse(rangeHeader)
 
         switch path {
-        case "/app.ipa":
+        case "/\(installToken)/app.ipa":
             guard let ipa = state.withLock({ $0.ipaURL }),
                   FileManager.default.fileExists(atPath: ipa.path) else {
                 sendResponse(fd, status: "404 Not Found", contentType: "text/plain", body: Data("not found".utf8), headOnly: false)
                 return
             }
             sendFile(fd, url: ipa, headOnly: headOnly, range: range)
-        case "/install":
+        case "/\(installToken)/install":
             sendResponse(fd, status: "200 OK", contentType: "text/html", body: Data(installPage().utf8), headOnly: headOnly)
         case "/health":
             sendResponse(fd, status: "200 OK", contentType: "text/plain", body: Data("ok".utf8), headOnly: headOnly)

@@ -25,6 +25,12 @@ struct ContentView: View {
     @State private var enableDocuments = false
     /// Set by "Sign Without App Groups": the profile may grant no App Groups.
     @State private var allowMissingAppGroups = false
+    /// Set by "Sign Without Watch App": sign the app alone, dropping its Watch app.
+    @State private var removeWatchApp = false
+    @State private var showSigningLog = false
+    /// Set by the extensions button, so the removal lasts for that one sign attempt (audit U3).
+    @State private var removeExtensionsByConsent = false
+    @State private var pendingImportError: String?
     /// Off by default so existing signing is unchanged. On = AltStore's rule:
     /// only the profile entitlements the app itself declares.
     @AppStorage("matchAppEntitlements") private var matchAppEntitlements = false
@@ -45,7 +51,8 @@ struct ContentView: View {
     @State private var isImporting = false
     @State private var provisioningWarning: String?
     @AppStorage("automaticProvisioningEnabled") private var automaticProvisioningEnabled = false
-    @AppStorage("altServerAppleID") private var altServerAppleID = ""
+    /// Kept in the Keychain (AppleAccountVault), not in preferences (audit N7).
+    @State private var altServerAppleID = ""
     @AppStorage("altServerDeviceIdentifier") private var altServerDeviceIdentifier = ProvisioningAuditService.currentDeviceIdentifier ?? ""
     @AppStorage("anisetteServerURL") private var anisetteServerURL = ""
     @AppStorage("anisetteMode") private var anisetteModeRaw = ""
@@ -124,6 +131,7 @@ struct ContentView: View {
                                 GlassSecondaryButton(label: "Sign Without App Extensions",
                                                      systemImage: "puzzlepiece.extension") {
                                     removeExtensions = true
+                                    removeExtensionsByConsent = true
                                     sign(allowAutomaticProvisioning: false)
                                 }
                                 .padding(.horizontal, T.pad)
@@ -136,15 +144,26 @@ struct ContentView: View {
                                 }
                                 .padding(.horizontal, T.pad)
                                 .padding(.top, 12)
+                            } else if canSignWithoutWatchApp {
+                                GlassSecondaryButton(label: "Sign Without Watch App",
+                                                     systemImage: "applewatch") {
+                                    removeWatchApp = true
+                                    sign(allowAutomaticProvisioning: false)
+                                }
+                                .padding(.horizontal, T.pad)
+                                .padding(.top, 12)
                             }
+                            logButton
                         }
 
                         if let provisioningWarning, signer.phase != .provisioning {
                             warningCard(provisioningWarning)
+                            logButton
                         }
 
                         if case .failed(let message) = signer.phase {
                             errorCard(message)
+                            logButton
                         }
 
                         if let signedIPA {
@@ -159,10 +178,11 @@ struct ContentView: View {
                 .scrollContentBackground(.hidden)
                 .background { ForgeBackdrop() }
                 .toolbar(.hidden, for: .navigationBar)
-                .sheet(isPresented: $showIPAImporter) {
+                .background { auditObservers }
+                .sheet(isPresented: $showIPAImporter, onDismiss: presentPendingImportError) {
                     ForgeDocumentPicker {
                         guard ["ipa", "zip"].contains($0.pathExtension.lowercased()) else {
-                            importError = "Choose an IPA or ZIP archive."
+                            pendingImportError = "Choose an IPA or ZIP archive."
                             Task { @MainActor in showIPAImporter = false }
                             return
                         }
@@ -170,10 +190,10 @@ struct ContentView: View {
                         Task { @MainActor in showIPAImporter = false }
                     }
                 }
-                .sheet(isPresented: $showDylibImporter) {
+                .sheet(isPresented: $showDylibImporter, onDismiss: presentPendingImportError) {
                     ForgeDocumentPicker {
                         guard $0.pathExtension.lowercased() == "dylib" else {
-                            importError = "Choose a .dylib file."
+                            pendingImportError = "Choose a .dylib file."
                             Task { @MainActor in showDylibImporter = false }
                             return
                         }
@@ -181,10 +201,10 @@ struct ContentView: View {
                         Task { @MainActor in showDylibImporter = false }
                     }
                 }
-                .alert("Import failed", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+                .alert("Import failed", isPresented: importErrorShown) {
                     Button("OK", role: .cancel) { importError = nil }
                 } message: {
-                    Text(importError ?? "")
+                    Text(importMessage)
                 }
                 .alert("Two-Factor Authentication", isPresented: $altProvisioner.isRequestingVerificationCode) {
                     TextField("Six-digit code", text: $altProvisioner.verificationCode)
@@ -193,7 +213,7 @@ struct ContentView: View {
                     Button("Cancel", role: .cancel) { altProvisioner.cancelVerification() }
                     Button("Continue") { altProvisioner.submitVerificationCode() }
                 } message: {
-                    Text("Enter the verification code Apple sent to your trusted device.")
+                    Text(verificationMessage)
                 }
                 .sheet(isPresented: $showProfileSheet) {
                     ProfilesSheet()
@@ -201,24 +221,20 @@ struct ContentView: View {
                 .sheet(isPresented: $showCertSheet) {
                     CertificatesSheet()
                 }
+                .sheet(isPresented: $showSigningLog) {
+                    SigningLogView()
+                }
                 .sheet(isPresented: $showShare) {
                     if let signedIPA { ShareSheet(items: [signedIPA]) }
                 }
-                .onAppear { processPendingImports() }
+                .onAppear {
+                    processPendingImports()
+                    altServerAppleID = AppleAccountVault.load() ?? AppleAccountVault.migrateLegacyPreference() ?? altServerAppleID
+                }
                 .onChange(of: repoStore.pendingIPA) { _ in processPendingImports() }
                 .onChange(of: imports.pending) { _ in processPendingImports() }
                 .onChange(of: isImporting) { _ in processPendingImports() }
                 .onChange(of: signer.activeInputChecks) { _ in processPendingImports() }
-                .onChange(of: profileStore.profiles) { _ in refreshProvisioningAudit() }
-                .onChange(of: profileStore.isRefreshingMetadata) { _ in refreshProvisioningAudit() }
-                .onChange(of: profileStore.selectedID) { _ in refreshProvisioningAudit() }
-                .onChange(of: certStore.selectedID) { _ in refreshProvisioningAudit() }
-                .onChange(of: bundleId) { _ in refreshProvisioningAudit() }
-                .onChange(of: removeExtensions) { _ in refreshProvisioningAudit() }
-                .onChange(of: automaticProvisioningEnabled) { _ in refreshProvisioningAudit() }
-                .onChange(of: altServerDeviceIdentifier) { _ in refreshProvisioningAudit() }
-                .onChange(of: anisetteModeRaw) { _ in refreshProvisioningAudit() }
-                .onChange(of: remoteAnisetteServerAddress) { _ in refreshProvisioningAudit() }
                 .onChange(of: signer.phase) { _ in
                     if case .signing = signer.phase { signNotice = nil }
                     if !signer.isBusy { processPendingImports() }
@@ -228,6 +244,8 @@ struct ContentView: View {
                     dylibURL = nil
                     preflightState = .idle
                     provisioningAudit = nil
+                    signedIPA = nil
+                    signer.phase = .idle
                 }
                 .onChange(of: history.records) { _ in
                     if let signedIPA, !FileManager.default.fileExists(atPath: signedIPA.path) {
@@ -478,7 +496,7 @@ struct ContentView: View {
                             installCoordinator.cancel()
                         }
                     }
-                    if installCoordinator.lastError != nil, !installCoordinator.isInstalling {
+                    if installCoordinator.lastError != nil, installCoordinator.canRetry, !installCoordinator.isInstalling {
                         GlassSecondaryButton(label: "Try Again", systemImage: "arrow.clockwise") {
                             installCoordinator.retry()
                         }
@@ -535,6 +553,9 @@ struct ContentView: View {
                 if let bundleID { bundleId = bundleID }
                 provisioningAudit = nil
                 allowMissingAppGroups = false
+                // A new input starts with no result or error from the previous one (audit U1).
+                signedIPA = nil
+                signer.phase = .idle
                 signer.pruneStagedArchives(keeping: localURL)
                 preflightState = .inspecting
                 signer.beginInputCheck()
@@ -578,6 +599,54 @@ struct ContentView: View {
         }
     }
 
+    private var importMessage: String { importError ?? "" }
+
+    private var verificationMessage: String {
+        altProvisioner.verificationNotice ?? "Enter the verification code Apple sent to your trusted device."
+    }
+
+    /// Presents the import alert while an error is set.
+    private var importErrorShown: Binding<Bool> {
+        Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })
+    }
+
+    /// The inputs that change the provisioning audit. Kept out of the main body so the
+    /// body stays small enough for the compiler (audit U4).
+    private var auditObservers: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+                .onChange(of: profileStore.profiles) { _ in refreshProvisioningAudit() }
+                .onChange(of: profileStore.isRefreshingMetadata) { _ in refreshProvisioningAudit() }
+                .onChange(of: profileStore.selectedID) { _ in refreshProvisioningAudit() }
+                .onChange(of: certStore.selectedID) { _ in refreshProvisioningAudit() }
+                .onChange(of: bundleId) { _ in refreshProvisioningAudit() }
+                .onChange(of: removeExtensions) { _ in refreshProvisioningAudit() }
+                .onChange(of: allowMissingAppGroups) { _ in refreshProvisioningAudit() }
+                .onChange(of: removeWatchApp) { _ in refreshProvisioningAudit() }
+                .onChange(of: altServerAppleID) { storeAppleID($0) }
+                .onChange(of: altServerApplePassword) { _ in refreshProvisioningAudit() }
+                .onChange(of: anisetteServerURL) { _ in refreshProvisioningAudit() }
+                .onChange(of: automaticProvisioningEnabled) { _ in refreshProvisioningAudit() }
+                .onChange(of: altServerDeviceIdentifier) { _ in refreshProvisioningAudit() }
+                .onChange(of: anisetteModeRaw) { _ in refreshProvisioningAudit() }
+                .onChange(of: remoteAnisetteServerAddress) { _ in refreshProvisioningAudit() }
+    }
+
+    /// Keeps the Apple ID in the Keychain and re-checks the audit it feeds (audit U4).
+    private func storeAppleID(_ value: String) {
+        AppleAccountVault.store(value)
+        refreshProvisioningAudit()
+    }
+
+    /// Shows an import error once its picker has closed, so the alert is not
+    /// presented over the sheet that is still dismissing (audit U12).
+    private func presentPendingImportError() {
+        if let message = pendingImportError {
+            importError = message
+            pendingImportError = nil
+        }
+    }
+
     private var effectivePassword: String? {
         if let cert = certStore.selected, let saved = certStore.savedPassword(for: cert) {
             return saved
@@ -606,7 +675,7 @@ struct ContentView: View {
         if automaticProvisioningEnabled {
             if !isAppleAccountReady {
                 if canSignManually {
-                    return "Apple Account details are incomplete — ForgeSign will sign with the selected certificate and profile."
+                    return "Apple Account details are incomplete, so ForgeSign will sign with the selected certificate and profile. The Preflight card lists anything that blocks this IPA."
                 }
                 return "Add a certificate and profile, or enter your Apple Account details plus an anisette source."
             }
@@ -651,6 +720,7 @@ struct ContentView: View {
             requestedBundleID: bundleId,
             removeExtensions: removeExtensions,
             ignoreAppGroups: allowMissingAppGroups,
+            removeWatchApp: removeWatchApp,
             deviceIdentifier: automaticPath
                 ? altServerDeviceIdentifier
                 : ProvisioningAuditService.currentDeviceIdentifier
@@ -683,6 +753,19 @@ struct ContentView: View {
         !allowMissingAppGroups && provisioningAudit?.onlyAppGroupsBlocked == true
     }
 
+    private var canSignWithoutWatchApp: Bool {
+        !removeWatchApp && provisioningAudit?.onlyWatchAppBlocked == true
+    }
+
+    /// Opens the signing log beside any failure or warning.
+    private var logButton: some View {
+        GlassSecondaryButton(label: "View Signing Log", systemImage: "doc.plaintext") {
+            showSigningLog = true
+        }
+        .padding(.horizontal, T.pad)
+        .padding(.top, 12)
+    }
+
     private var canSignManually: Bool {
         certStore.selected != nil && profileStore.selected != nil && effectivePassword != nil
     }
@@ -690,13 +773,23 @@ struct ContentView: View {
     private func sign(allowAutomaticProvisioning: Bool = true) {
         guard !signer.isBusy, !isImporting else { return }
         // "Sign Without App Groups" consents to one sign attempt, not the IPA.
-        defer { allowMissingAppGroups = false }
+        defer {
+            allowMissingAppGroups = false
+            removeWatchApp = false
+            // The extensions removal from the button lasts for this attempt only (audit U3).
+            if removeExtensionsByConsent {
+                removeExtensions = false
+                removeExtensionsByConsent = false
+            }
+        }
         signNotice = nil
         guard let ipa = ipaURL else {
+            ForgeLog.event("Sign stopped: no IPA is chosen.")
             signNotice = "Choose an IPA first — there is nothing to sign yet."
             return
         }
         if let blocker = preflightState.signingBlocker {
+            ForgeLog.event("Blocked before signing: \(blocker)")
             signNotice = blocker
             return
         }
@@ -712,6 +805,7 @@ struct ContentView: View {
                 requestedBundleID: bundleId,
                 removeExtensions: removeExtensions,
                 ignoreAppGroups: allowMissingAppGroups,
+                removeWatchApp: removeWatchApp,
                 deviceIdentifier: altServerDeviceIdentifier
             )
             provisioningAudit = audit
@@ -732,6 +826,7 @@ struct ContentView: View {
         guard let cert = certStore.selected,
               let pw = effectivePassword,
               let profile = profileStore.selected else {
+            ForgeLog.event("Sign stopped: no certificate or profile is selected.")
             signNotice = allowAutomaticProvisioning
                 ? "Signing needs a certificate (.p12 with its password) and a provisioning profile. Add them under Input, or enter your Apple Account details under Provisioning so ForgeSign can create them."
                 : "ForgeSign could not select the certificate or profile it just created. Tap Sign again, or import a certificate and profile manually."
@@ -747,6 +842,7 @@ struct ContentView: View {
             requestedBundleID: bundleId,
             removeExtensions: removeExtensions,
             ignoreAppGroups: allowMissingAppGroups,
+            removeWatchApp: removeWatchApp,
             deviceIdentifier: automaticProvisioningEnabled && isAppleAccountReady
                 ? altServerDeviceIdentifier
                 : ProvisioningAuditService.currentDeviceIdentifier
@@ -760,10 +856,13 @@ struct ContentView: View {
                 advice = "The \(blocker.kind.displayName.lowercased()) needs App Groups (\(blocker.requiredAppGroups.joined(separator: ", "))). "
                     + "To sign now, turn them off; the signed app loses access to their shared data. "
                     + "Or import a profile that grants them."
+            } else if audit.onlyWatchAppBlocked {
+                advice = "To sign now, remove the Watch app. It will not be installed. Or import a profile that covers it."
             } else {
                 advice = "Import a matching profile or use Apple Account provisioning."
             }
             signNotice = "\(blocker.kind.displayName) \(blocker.resolvedBundleID): \(blocker.detail) " + advice
+            ForgeLog.event("Blocked before signing: \(blocker.kind.displayName) \(blocker.resolvedBundleID): \(blocker.detail)")
             return
         }
 
@@ -773,6 +872,7 @@ struct ContentView: View {
             profileStore.profiles.first { $0.id == id }
         }
         guard !profileFiles.isEmpty, profileFiles.count == audit.selectedProfileIDs.count else {
+            ForgeLog.event("Sign stopped: the matching profiles are no longer available.")
             signNotice = "The matching profiles are no longer available. Choose them again."
             return
         }
@@ -794,12 +894,13 @@ struct ContentView: View {
         let outName = output.lastPathComponent
         let request = SigningRequest(
             ipa: ipa, p12: p12, password: pw,
-            profiles: profileFiles.map { SigningRequest.Profile(url: profileStore.fileURL(for: $0), name: $0.displayName) },
+            profiles: profileFiles.map { SigningRequest.Profile(url: profileStore.fileURL(for: $0), name: $0.displayName, isAuthentic: $0.profileIsAuthentic) },
             bundleID: bundleId.trimmingCharacters(in: .whitespacesAndNewlines),
             output: output, temporaryDirectory: signer.tempDir,
             removeExtensions: removeExtensions, enableDocuments: enableDocuments,
             matchAppEntitlements: matchAppEntitlements, dylib: dylibURL,
-            injectIntoExtensions: injectIntoExtensions
+            injectIntoExtensions: injectIntoExtensions,
+            removeWatchApp: removeWatchApp
         )
         Task {
             defer { signer.cleanTemp() }
@@ -807,22 +908,28 @@ struct ContentView: View {
             case .failure(let error):
                 signer.phase = .failed(error.message)
             case .success(let result):
+                provisioningWarning = nil
                 let record = history.append(inputName: ipa.lastPathComponent,
                                             outputName: outName, bundleId: result.bundleID,
                                             version: result.version, certificateCN: certCN,
                                             profileExpiresAt: profileExpiry)
                 lastRecordID = record.id
+                // The result is shown before any retained copy is made, so the screen
+                // does not read "Signing…" while the original is copied (audit U15).
+                signedIPA = result.url
+                signedBundleId = result.bundleID
+                signedVersion = result.version
+                signer.phase = .done(result.message)
                 if retainSource {
                     // Keep the input locked until the original copy finishes.
                     // Only the copy is cancellable; the verified IPA is retained.
                     let kept = await refreshSources.retain(ipa, for: record.id)
                     history.setRefreshSourceName(kept, for: record.id)
-                    if let message = refreshSources.retentionError { signNotice = message }
+                    if let message = refreshSources.retentionError {
+                        ForgeLog.event("Original not kept for refresh: \(message)")
+                        signNotice = message
+                    }
                 }
-                signedIPA = result.url
-                signedBundleId = result.bundleID
-                signedVersion = result.version
-                signer.phase = .done(result.message)
             }
         }
     }
@@ -853,6 +960,8 @@ struct ContentView: View {
                     importedCertificateData: importedCertificateData,
                     importedCertificatePassword: importedCertificatePassword
                 )
+                // The password is needed only for this sign-in; it is not kept after success (audit N7).
+                altServerApplePassword = ""
                 let certificateFilename = "ForgeSign-\(response.teamIdentifier).p12"
                 let importedCertificate: CertificateRecord
                 switch certStore.importCertificate(data: response.certificateData,
@@ -903,10 +1012,12 @@ struct ContentView: View {
                 sign(allowAutomaticProvisioning: false)
             } catch {
                 if canSignManually {
+                    ForgeLog.event("Apple Account provisioning could not finish: \(error.localizedDescription)")
                     provisioningWarning = "Apple Account provisioning could not finish: \(error.localizedDescription) Checking the imported profiles for manual signing."
                     signer.phase = .idle
                     sign(allowAutomaticProvisioning: false)
                 } else {
+                    ForgeLog.event("Apple Account provisioning failed: \(error.localizedDescription)")
                     signer.phase = .failed(error.localizedDescription)
                 }
             }

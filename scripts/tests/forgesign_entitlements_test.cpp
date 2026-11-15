@@ -1,5 +1,10 @@
+// Checks always run. assert() is removed under NDEBUG, which would skip setup
+// that these tests depend on (audit B11).
+#include <cstdio>
+#include <cstdlib>
+#define CHECK(expr) do { if (!(expr)) { std::fprintf(stderr, "%s:%d: check failed: %s\n", __FILE__, __LINE__, #expr); std::exit(1); } } while (0)
+
 #include "forgesign_entitlements.h"
-#include <cassert>
 
 static string plist(const string& body)
 {
@@ -22,20 +27,20 @@ int main()
         "<key>com.apple.developer.icloud-services</key><array><string>CloudKit</string></array>");
 
     jvalue out;
-    assert(out.read_plist(FSMatchAppEntitlements(profile, app, "TEAM")));
+    CHECK(out.read_plist(FSMatchAppEntitlements(profile, app, "TEAM")));
     // Identity keys always survive; undeclared capabilities are dropped.
-    assert(out["application-identifier"].as_string() == "TEAM.app.example");
-    assert(out.has("com.apple.developer.team-identifier"));
-    assert(out.has("get-task-allow"));
-    assert(!out.has("com.apple.developer.associated-domains"));
-    assert(!out.has("com.apple.developer.healthkit"));
+    CHECK(out["application-identifier"].as_string() == "TEAM.app.example");
+    CHECK(out.has("com.apple.developer.team-identifier"));
+    CHECK(out.has("get-task-allow"));
+    CHECK(!out.has("com.apple.developer.associated-domains"));
+    CHECK(!out.has("com.apple.developer.healthkit"));
     // Declared capabilities keep the profile's value; keychain groups move to the profile team.
-    assert(out["com.apple.developer.kernel.increased-memory-limit"].as_bool());
-    assert(out["keychain-access-groups"].size() == 1);
-    assert(out["keychain-access-groups"].at(0).as_string() == "TEAM.com.example.shared");
+    CHECK(out["com.apple.developer.kernel.increased-memory-limit"].as_bool());
+    CHECK(out["keychain-access-groups"].size() == 1);
+    CHECK(out["keychain-access-groups"].at(0).as_string() == "TEAM.com.example.shared");
     // Nothing the profile lacks is invented.
-    assert(!out.has("com.apple.developer.icloud-services"));
+    CHECK(!out.has("com.apple.developer.icloud-services"));
     // No app entitlements (unsigned input): today's behaviour, profile verbatim.
-    assert(FSMatchAppEntitlements(profile, "", "TEAM") == profile);
+    CHECK(FSMatchAppEntitlements(profile, "", "TEAM") == profile);
     return 0;
 }

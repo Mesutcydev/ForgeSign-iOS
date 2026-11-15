@@ -24,6 +24,7 @@ import urllib.request
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG = ROOT / "scripts/dependencies"
 LOCK = json.loads((CONFIG / "lock.json").read_text())
+PATCH_PINS = json.loads((CONFIG / "patches.json").read_text())
 BUILD = ROOT / "build/dependencies"
 VENDOR = ROOT / "vendor"
 
@@ -69,6 +70,35 @@ def archive(name, cache):
     return path
 
 
+def pinned_digest(name):
+    """Digest of a patch or source file, refused unless it matches scripts/dependencies/patches.json."""
+    pin = PATCH_PINS[name]
+    actual = digest(ROOT / pin["file"])
+    if actual != pin["sha256"]:
+        raise RuntimeError(f"{pin['file']} does not match its pinned digest")
+    return actual
+
+
+def tree_digest(root, skip=()):
+    """SHA-256 over every file and symlink under root, in a stable order.
+    Symlinks are recorded, not followed, so a link cannot pull in other files."""
+    entries = []
+    for directory, subdirectories, files in os.walk(root, followlinks=False):
+        for name in subdirectories + files:
+            if name not in skip:
+                entries.append(Path(directory, name))
+    hasher = hashlib.sha256()
+    for path in sorted(entries):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            hasher.update(f"link {relative} -> {os.readlink(path)}\0".encode())
+        elif path.is_file():
+            hasher.update(f"file {relative}\0".encode())
+            with path.open("rb") as file:
+                hasher.update(hashlib.file_digest(file, "sha256").digest())
+    return hasher.hexdigest()
+
+
 def extract(source, destination):
     """Extract checked upstream archives, rejecting traversal and special files."""
     destination.mkdir(parents=True, exist_ok=True)
@@ -102,13 +132,17 @@ def build_openssl(source, jobs):
     sdk_versions = {sdk: output(["xcrun", "--sdk", sdk, "--show-sdk-version"]) for _, sdk, *_ in SLICES}
     state = {
         "source": LOCK["openssl"], "xcode": toolchain, "sdks": sdk_versions,
-        "initializer_sha256": digest(CONFIG / "openssl_init.c"),
+        "initializer_sha256": pinned_digest("openssl_initializer"),
         "recipe_sha256": digest(Path(__file__)), "host_architecture": HOST_ARCH,
         "configuration": ["no-shared", "no-module", "no-tests", "no-apps", "enable-legacy"],
     }
     target = VENDOR / "openssl/OpenSSL.xcframework"
     stamp = VENDOR / "openssl/build-info.json"
-    if target.exists() and stamp.exists() and json.loads(stamp.read_text()) == state:
+    # Reuse only when the stamp matches AND the framework on disk is still the one
+    # that was built (audit B10): a local edit under vendor/ must trigger a rebuild.
+    recorded = json.loads(stamp.read_text()) if stamp.exists() else {}
+    if target.exists() and recorded.get("output_sha256") == tree_digest(target) and \
+            {k: v for k, v in recorded.items() if k != "output_sha256"} == state:
         print("Pinned OpenSSL framework is current", flush=True)
         return
 
@@ -176,16 +210,19 @@ def build_openssl(source, jobs):
     for name in ("NOTICE", "NOTICE.txt", "NOTICE.md"):
         if (source / name).exists():
             shutil.copy2(source / name, target.parent / name)
-    stamp.write_text(json.dumps(state, indent=2) + "\n")
+    stamp.write_text(json.dumps({**state, "output_sha256": tree_digest(target)}, indent=2) + "\n")
 
 
 def prepare_altsign(archives):
     state = {name: LOCK[name] for name in ("altsign", "ldid", "libplist")}
-    state["auth_patch_sha256"] = digest(VENDOR / "altsign-gsa-http503.patch")
-    state["compatibility_patch_sha256"] = digest(CONFIG / "altsign-compatibility.patch")
+    state["auth_patch_sha256"] = pinned_digest("altsign_gsa_http503")
+    state["compatibility_patch_sha256"] = pinned_digest("altsign_compatibility")
     target = VENDOR / "AltSign"
     marker = target / ".forgesign-prepared.json"
-    if marker.exists() and json.loads(marker.read_text()) == state:
+    # Reuse only when the tree on disk is still the one prepared (audit B10).
+    recorded = json.loads(marker.read_text()) if marker.exists() else {}
+    if target.exists() and recorded.get("tree_sha256") == tree_digest(target, skip=(marker.name,)) and \
+            {k: v for k, v in recorded.items() if k != "tree_sha256"} == state:
         print("Pinned AltSign source is current", flush=True)
         return
     with tempfile.TemporaryDirectory(dir=BUILD) as temporary:
@@ -205,7 +242,9 @@ def prepare_altsign(archives):
         include_root = package / "Dependencies/OpenSSL/ios"
         include_root.mkdir()
         (include_root / "include").symlink_to("../../../../openssl/OpenSSL.xcframework/ios-arm64/OpenSSL.framework/Headers")
-        (package / ".forgesign-prepared.json").write_text(json.dumps(state, indent=2) + "\n")
+        prepared_tree = tree_digest(package, skip=(".forgesign-prepared.json",))
+        (package / ".forgesign-prepared.json").write_text(
+            json.dumps({**state, "tree_sha256": prepared_tree}, indent=2) + "\n")
         if target.exists():
             if not marker.exists():
                 raise RuntimeError("Refusing to replace an unmanaged vendor/AltSign directory")
@@ -227,9 +266,10 @@ def main():
     archives = {name: archive(name, args.cache) for name in LOCK}
     source_path = BUILD / "source"
     source = source_path / f"openssl-{LOCK['openssl']['version']}"
-    if not (source / "Configure").exists():
-        shutil.rmtree(source_path, ignore_errors=True)
-        extract(archives["openssl"], source_path)
+    # Always extract from the archive whose digest was just verified. An old extracted
+    # tree is never trusted, because nothing checks it (audit B10).
+    shutil.rmtree(source_path, ignore_errors=True)
+    extract(archives["openssl"], source_path)
     build_openssl(source, args.jobs)
     prepare_altsign(archives)
     print("Dependencies prepared. Run xcodegen generate.", flush=True)

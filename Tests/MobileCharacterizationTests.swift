@@ -431,6 +431,61 @@ struct MobileCharacterizationTests {
         #expect(!signed.onlyAppGroupsBlocked)
     }
 
+    @Test("Signing without the Watch app removes it instead of blocking on its profile")
+    func provisioningAuditCanRemoveWatchApp() {
+        let rootProfile = profile(name: "Root", appID: "TEAM.com.original.demo")
+        let inspection = IPAPreflight(
+            appName: "Demo", bundleIdentifier: "com.original.demo",
+            shortVersion: "1.0", buildVersion: "1", minimumOSVersion: "16.0",
+            nestedBundleCount: 1, extensionCount: 0, frameworkCount: 0,
+            watchAppCount: 1, totalMachOCount: 2, signedMachOCount: 2,
+            encryptedExecutableCount: 0, encryptedPaths: [],
+            bundles: [
+                SignableBundleInspection(path: "/", kind: .app,
+                                         bundleIdentifier: "com.original.demo",
+                                         entitlementsAvailable: true,
+                                         requiredAppGroups: [],
+                                         requiredKeychainAccessGroups: []),
+                SignableBundleInspection(path: "Watch/Demo Watch.app", kind: .watchApp,
+                                         bundleIdentifier: "com.original.demo.watchkitapp",
+                                         entitlementsAvailable: true,
+                                         requiredAppGroups: [],
+                                         requiredKeychainAccessGroups: [])
+            ],
+            archiveBytes: 1_024
+        )
+        let blocked = ProvisioningAuditService.makeAudit(
+            inspection: inspection, profiles: [rootProfile], preferredProfileID: rootProfile.id,
+            certificate: certificate(), requestedBundleID: "", removeExtensions: false,
+            deviceIdentifier: "DEVICE"
+        )
+        #expect(blocked.rows.last?.state == .missingProfile)
+        #expect(blocked.onlyWatchAppBlocked)
+        #expect(!blocked.isReady)
+
+        let removed = ProvisioningAuditService.makeAudit(
+            inspection: inspection, profiles: [rootProfile], preferredProfileID: rootProfile.id,
+            certificate: certificate(), requestedBundleID: "", removeExtensions: false,
+            removeWatchApp: true, deviceIdentifier: "DEVICE"
+        )
+        #expect(removed.rows.last?.state == .removed)
+        #expect(removed.isReady)
+        #expect(!removed.onlyWatchAppBlocked)
+    }
+
+    @Test("A check that cannot run is named as a warning, not a silent pass")
+    func missingDeviceIdentifierWarns() {
+        let rootProfile = profile(name: "Root", appID: "TEAM.com.original.demo")
+        let audit = ProvisioningAuditService.makeAudit(
+            inspection: rootOnlyInspection(), profiles: [rootProfile], preferredProfileID: rootProfile.id,
+            certificate: certificate(), requestedBundleID: "", removeExtensions: false,
+            deviceIdentifier: nil
+        )
+        #expect(audit.isReady, "a warning must not block signing")
+        #expect(audit.rows.first?.state == .warning)
+        #expect(audit.rows.first?.detail.contains("device's identifier is unknown") == true)
+    }
+
     @Test("A missing IPA fails the install with a reason instead of hanging")
     @MainActor
     func installMissingPackage() {
@@ -888,6 +943,83 @@ struct MobileCharacterizationTests {
                       appGroups: groups, keychainAccessGroups: [],
                       developerCertificateSHA256: ["certificate"],
                       profileIsAuthentic: true, addedAt: .now)
+    }
+}
+
+@Suite("Signing log")
+struct SigningLogTests {
+    private func scratchLog() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("forgesign-log-\(UUID().uuidString).log")
+    }
+
+    @Test("Records accumulate in order and clear")
+    func recordsAccumulateAndClear() {
+        let url = scratchLog()
+        defer { ForgeLog.clear(at: url) }
+        ForgeLog.append("first\n", to: url)
+        ForgeLog.append("second\n", to: url)
+        #expect(ForgeLog.read(from: url) == "first\nsecond\n")
+        ForgeLog.clear(at: url)
+        #expect(ForgeLog.read(from: url).isEmpty)
+    }
+
+    @Test("Passing the limit drops the oldest record and keeps the newest")
+    func limitKeepsNewestRecord() {
+        let url = scratchLog()
+        defer { ForgeLog.clear(at: url) }
+        let old = "=== Sign old.ipa ===\n" + String(repeating: "a", count: 480) + "\n"
+        let newest = "=== Sign new.ipa ===\nResult: failed: profile missing\n"
+        ForgeLog.append(old, to: url, limit: 500)
+        ForgeLog.append(newest, to: url, limit: 500)
+        let text = ForgeLog.read(from: url)
+        #expect(text.hasPrefix("=== Sign new.ipa"))
+        #expect(!text.contains("old.ipa"))
+        #expect(text.utf8.count <= 500)
+    }
+}
+
+@Suite("Index files")
+struct IndexFileTests {
+    private struct Sample: Codable, Equatable {
+        var names: [String]
+    }
+
+    private func scratchDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("index-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
+    }
+
+    @Test("An unreadable index is moved aside, never overwritten")
+    func unreadableIndexIsMovedAside() throws {
+        let directory = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("history.json")
+        try Data("not json".utf8).write(to: url)
+
+        let loaded = ProtectedPersistence.loadIndex(Sample.self, from: url)
+
+        #expect(loaded.value == nil)
+        #expect(loaded.safeToSave)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        let kept = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix("history.json.unreadable-") }
+        #expect(kept.count == 1, "the unreadable file must still exist under a new name")
+    }
+
+    @Test("A readable index loads unchanged")
+    func readableIndexLoads() throws {
+        let directory = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("profiles.json")
+        try JSONEncoder().encode(Sample(names: ["a", "b"])).write(to: url)
+
+        let loaded = ProtectedPersistence.loadIndex(Sample.self, from: url)
+
+        #expect(loaded.value == Sample(names: ["a", "b"]))
+        #expect(loaded.safeToSave)
+        #expect(FileManager.default.fileExists(atPath: url.path))
     }
 }
 

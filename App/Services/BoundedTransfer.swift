@@ -21,6 +21,15 @@ struct TransferProgress: Equatable, Sendable {
 /// File I/O and delegate state stay on one serial queue. Only cancellation and
 /// its task reference cross threads, protected by controlLock.
 final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    /// Free space kept after a download, so the device never fills up to the last byte.
+    static let storageHeadroom: Int64 = 64 * 1024 * 1024
+
+    static func availableCapacity(near url: URL) -> Int64? {
+        let folder = url.deletingLastPathComponent()
+        let values = try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        return values?.volumeAvailableCapacityForImportantUsage
+    }
+
     enum Failure: LocalizedError, Equatable, Sendable {
         case invalidURL, invalidResponse, tooLarge, sizeMismatch, empty, storage
 
@@ -164,6 +173,13 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
             return
         }
         totalBytes = expectedBytes ?? (response.expectedContentLength > 0 ? response.expectedContentLength : nil)
+        // Refuse a download the disk cannot hold before writing a byte of it (audit N5).
+        if let needed = totalBytes, let available = BoundedTransfer.availableCapacity(near: destination),
+           available < needed + BoundedTransfer.storageHeadroom {
+            completionHandler(.cancel)
+            finish(throwing: Failure.storage)
+            return
+        }
         receivedResponse = true
         progress(TransferProgress(receivedBytes: 0, totalBytes: totalBytes))
         completionHandler(.allow)
@@ -173,8 +189,11 @@ final class BoundedTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendab
         guard !finished else { return }
         guard !isCancelled else { finish(throwing: CancellationError()); return }
         guard receivedResponse, let file else { finish(throwing: Failure.invalidResponse); return }
-        guard Int64(data.count) <= maximumBytes - receivedBytes else {
-            finish(throwing: Failure.tooLarge)
+        // The declared size is the real limit when the repository gives one; the
+        // budget is only the ceiling for an unknown size (audit N5).
+        let limit = expectedBytes ?? maximumBytes
+        guard Int64(data.count) <= limit - receivedBytes else {
+            finish(throwing: expectedBytes == nil ? Failure.tooLarge : Failure.sizeMismatch)
             return
         }
         do {

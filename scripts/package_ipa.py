@@ -24,6 +24,8 @@ def validate_ipa(ipa, allow_metadata=False):
                 raise ValueError(f"Unsafe archive path: {name}")
             if is_metadata(name) and not allow_metadata:
                 raise ValueError(f"macOS metadata must not be packaged: {name}")
+            if PurePosixPath(name).name.endswith((".debug.dylib", ".preview.dylib")):
+                raise ValueError(f"Debug dylibs must not be packaged: {name}")
         retained = [name for name in names if not is_metadata(name)]
         roots = {PurePosixPath(name).parts[1] for name in retained
                  if name.startswith("Payload/") and len(PurePosixPath(name).parts) > 1}

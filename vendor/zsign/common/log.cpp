@@ -2,11 +2,20 @@
 
 
 int ZLog::g_nLogLevel = ZLog::E_INFO;
+string* ZLog::g_pCapture = NULL;
+
+// ForgeSign: the capture is capped so a large IPA cannot grow it without limit.
+static const size_t kCaptureLimit = 512 * 1024;
 
 void ZLog::_Print(const char* szLog, int nColor)
 {
 	if (g_nLogLevel <= E_NONE) {
 		return;
+	}
+
+// ForgeSign: keep the text for the app's signing log (see FSLogCapture).
+	if (NULL != g_pCapture && g_pCapture->size() < kCaptureLimit) {
+		g_pCapture->append(szLog);
 	}
 
 #ifdef _WIN32

@@ -81,8 +81,13 @@ struct LibraryView: View {
                         deleteRecord(record)
                     }
                 }
+            } message: { record in
+                if RefreshPlanner.shouldRefresh(expiry: record.profileExpiresAt),
+                   refreshSources.sourceURL(for: record.id) == nil {
+                    Text("This profile is due and ForgeSign kept no original. Sign the IPA again from its source file to refresh it.")
+                }
             }
-            .alert("Could not delete signed IPA", isPresented: $deleteError) {
+            .alert("Could not remove the file", isPresented: $deleteError) {
                 Button("OK", role: .cancel) { deleteError = false }
             } message: {
                 Text("The file is still in ForgeSign storage. Try again after the current operation finishes.")
@@ -163,7 +168,7 @@ struct LibraryView: View {
                     GlassSecondaryButton(label: "Cancel Install", systemImage: "xmark.circle") {
                         installCoordinator.cancel()
                     }
-                } else if installCoordinator.lastError != nil {
+                } else if installCoordinator.lastError != nil, installCoordinator.canRetry {
                     GlassSecondaryButton(label: "Try Again", systemImage: "arrow.clockwise") {
                         installCoordinator.retry()
                     }
@@ -258,7 +263,7 @@ struct LibraryView: View {
     private func refreshPill(_ record: SigningRecord) -> some View {
         if RefreshPlanner.shouldRefresh(expiry: record.profileExpiresAt) {
             let canRefresh = refreshSources.sourceURL(for: record.id) != nil
-            GlassStatusPill(text: canRefresh ? "refresh due" : "action needed",
+            GlassStatusPill(text: canRefresh ? "refresh due" : "re-sign needed",
                             color: canRefresh ? T.warn : T.bad)
         } else if refreshSources.sourceURL(for: record.id) != nil {
             GlassStatusPill(text: "refresh ready", color: T.accent2)

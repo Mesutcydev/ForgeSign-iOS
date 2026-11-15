@@ -156,6 +156,8 @@ struct AutomaticProvisioningSection: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
                 .disabled(altServer.isCheckingAnisette)
                 .accessibilityLabel("Test anisette source")
             }
@@ -207,6 +209,8 @@ struct AutomaticProvisioningSection: View {
                         .foregroundColor(T.accent2)
                 }
                 .buttonStyle(.plain)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
                 .accessibilityLabel("Search for AltServer again")
             }
         }
@@ -229,7 +233,7 @@ struct AutomaticProvisioningSection: View {
                     Text(error)
                         .font(T.mono(9))
                         .foregroundColor(T.bad)
-                        .lineLimit(1)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             if let result = altServer.anisetteCheckResult {
@@ -259,7 +263,7 @@ struct AutomaticProvisioningSection: View {
     private var anisetteHint: String {
         switch mode {
         case .automatic, .remoteServer, .customURL:
-            return "Remote anisette servers only relay the Apple sign-in handshake — your Apple password goes to Apple, never to the server. Existing AltStore certificates are not revoked."
+            return "Remote anisette servers relay the Apple sign-in handshake and receive your device identifier. Your Apple password goes to Apple, never to the server. Existing AltStore certificates are not revoked."
         case .thisDevice:
             return "Uses only this iPhone's Apple sign-in data. If Apple rejects it, switch to Automatic to use a remote anisette server."
         case .altServerOnly:

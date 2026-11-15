@@ -67,7 +67,15 @@ struct ProfilesSheet: View {
                     Text("The provisioning profile is removed from this device.")
                 }
                 .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
-                    guard case .success(let urls) = result, let url = urls.first else { return }
+                    let url: URL
+                    switch result {
+                    case .success(let urls):
+                        guard let first = urls.first else { return }
+                        url = first
+                    case .failure(let failure):
+                        error = failure.localizedDescription
+                        return
+                    }
                     guard url.pathExtension.lowercased() == "mobileprovision" else {
                         error = "Choose a .mobileprovision file."
                         return

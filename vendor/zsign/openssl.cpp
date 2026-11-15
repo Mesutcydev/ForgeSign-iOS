@@ -271,9 +271,17 @@ ZSignAsset::OpenSSLInit::OpenSSLInit()
 #endif
 }
 
+// ForgeSign: send OpenSSL's reasons through ZLog so the app's signing log keeps them.
+static int ZSignAppendOpenSSLError(const char* text, size_t len, void*)
+{
+	string line(text, len);
+	ZLog::Error(line.c_str());
+	return 1;
+}
+
 bool ZSignAsset::CMSError()
 {
-	ERR_print_errors_fp(stdout);
+	ERR_print_errors_cb(ZSignAppendOpenSSLError, NULL);
 	return false;
 }
 

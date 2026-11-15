@@ -268,7 +268,8 @@ bool ZSign::SlotParseEntitlements(uint8_t* pSlotBase, CS_BlobIndex* pbi)
 	string strEntitlements = "\t\t\t";
 	strEntitlements.append((const char*)pSlotBase + 8, uSlotLength - 8);
 	ZUtil::StringReplace(strEntitlements, "\n", "\n\t\t\t");
-	ZLog::PrintV("\tentitlements: \n%s\n", strEntitlements.c_str());
+	// ForgeSign: debug only, so the signing log does not carry the entitlements dump.
+	ZLog::DebugV("\tentitlements: \n%s\n", strEntitlements.c_str());
 
 	SlotParseGeneralTailer(pSlotBase, uSlotLength);
 

@@ -127,7 +127,8 @@ final class SigningService: ObservableObject {
     nonisolated static func sign(ipa: URL, p12: URL, password: String, profiles: [URL],
                       bundleId: String, output: URL, tempDir: URL,
                       removeExtensions: Bool, enableDocuments: Bool,
-                      matchAppEntitlements: Bool = false)
+                      matchAppEntitlements: Bool = false,
+                      removeWatchApp: Bool = false)
         -> (ok: Bool, message: String, signedBundleId: String, signedVersion: String) {
         #if !FORGE_BRIDGE
         // UI-preview builds (e.g. the simulator target) omit the zsign engine.
@@ -135,7 +136,7 @@ final class SigningService: ObservableObject {
         #else
         var msgBuf = [CChar](repeating: 0, count: 1024)
         var bidBuf = [CChar](repeating: 0, count: 512)
-        var verBuf = [CChar](repeating: 0, count: 128)
+        var verBuf = [CChar](repeating: 0, count: 512)
         let profilePaths = profiles.map(\.path).joined(separator: "\n")
         let status = forgesign_sign_ipa_profiles(
             ipa.path, p12.path, password, profilePaths,
@@ -145,6 +146,7 @@ final class SigningService: ObservableObject {
             removeExtensions ? 1 : 0,
             enableDocuments ? 1 : 0,
             matchAppEntitlements ? 1 : 0,
+            removeWatchApp ? 1 : 0,
             &msgBuf, Int32(msgBuf.count),
             &bidBuf, Int32(bidBuf.count),
             &verBuf, Int32(verBuf.count)
@@ -154,6 +156,17 @@ final class SigningService: ObservableObject {
         let signedVersion = String(decoding: verBuf.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
         return (status == 0, message.isEmpty ? (status == 0 ? "Signed." : "Failed.") : message,
                 signedId, signedVersion.isEmpty ? "1.0" : signedVersion)
+        #endif
+    }
+
+    /// Takes the zsign output from the last signing call and clears it.
+    nonisolated static func takeLog() -> String {
+        #if !FORGE_BRIDGE
+        return ""
+        #else
+        var buffer = [CChar](repeating: 0, count: 600_000)
+        _ = forgesign_take_log(&buffer, Int32(buffer.count))
+        return String(decoding: buffer.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) }, as: UTF8.self)
         #endif
     }
 

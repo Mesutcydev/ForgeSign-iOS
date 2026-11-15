@@ -73,12 +73,32 @@ enum AnisettePreference {
 
     static func parseURL(_ text: String) -> URL? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty,
-              let url = URL(string: trimmed),
-              let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              let host = url.host, !host.isEmpty else { return nil }
+        guard !trimmed.isEmpty, let url = URL(string: trimmed), isAcceptableServerURL(url) else { return nil }
         return url
+    }
+
+    /// HTTPS is always accepted. Plain HTTP is accepted only for this device or the
+    /// local network, where the handshake does not cross the internet (audit N3).
+    static func isAcceptableServerURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), let host = url.host?.lowercased(), !host.isEmpty else {
+            return false
+        }
+        if scheme == "https" { return true }
+        return scheme == "http" && isLocalHost(host)
+    }
+
+    static func isLocalHost(_ host: String) -> Bool {
+        let bare = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        if bare == "localhost" || bare.hasSuffix(".local") { return true }
+        if bare.contains(":") {
+            // IPv6: loopback, link-local and unique-local addresses only.
+            return bare == "::1" || bare.hasPrefix("fe80:") || bare.hasPrefix("fc") || bare.hasPrefix("fd")
+        }
+        let octets = bare.split(separator: ".").compactMap { Int($0) }
+        guard octets.count == 4 else { return false }
+        let (first, second) = (octets[0], octets[1])
+        return first == 127 || first == 10 || (first == 172 && (16...31).contains(second))
+            || (first == 192 && second == 168) || (first == 169 && second == 254)
     }
 
     /// Resolves the stored preference into the ordered source list a fetch uses.
