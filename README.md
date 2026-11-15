@@ -141,6 +141,10 @@ installed as an upgrade so app data survives.
   claimed: a sideloaded app cannot rely on `BGTaskScheduler`, and ForgeSign does
   not pretend otherwise.
 
+## What’s new in 2.8.6
+
+- **Clear fix when an App Group blocks signing.** When the profile you picked does not grant an App Group the app declares, the error now names the groups, says to turn them off to sign, and offers **Sign Without App Groups**. The signed app loses access to its shared group data. Validated with 86 simulator tests.
+
 ## What’s new in 2.8.5
 
 - **Signing with your imported profile works again.** An IPA whose bundle ID no imported profile covers was blocked with "No imported provisioning profile matches this bundle ID" from 2.4 on, even when you had picked the profile yourself. 2.8.3 restored that for a bundle ID you changed by hand only, so an unchanged app still dead-ended. The selected profile now signs the main app whatever the bundle ID is, exactly as in 2.1, with the App row showing **selected profile** as a warning; authenticity, team, expiry, device and App Group checks still apply. Extensions keep using the app's profile, and a Watch app or App Clip still needs its own.

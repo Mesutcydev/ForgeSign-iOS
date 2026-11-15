@@ -397,6 +397,40 @@ struct MobileCharacterizationTests {
         #expect(!withoutExtensions.rows.contains { $0.kind != .app && $0.state.isBlocking })
     }
 
+    @Test("Signing without App Groups lets a profile that grants none sign the app")
+    func provisioningAuditCanIgnoreMissingAppGroups() {
+        let plain = profile(name: "Plain", appID: "TEAM.com.original.demo")
+        let inspection = IPAPreflight(
+            appName: "Demo", bundleIdentifier: "com.original.demo",
+            shortVersion: "1.0", buildVersion: "1", minimumOSVersion: "16.0",
+            nestedBundleCount: 0, extensionCount: 0, frameworkCount: 0,
+            watchAppCount: 0, totalMachOCount: 1, signedMachOCount: 1,
+            encryptedExecutableCount: 0, encryptedPaths: [],
+            bundles: [SignableBundleInspection(path: "/", kind: .app,
+                                               bundleIdentifier: "com.original.demo",
+                                               entitlementsAvailable: true,
+                                               requiredAppGroups: ["group.original.shared"],
+                                               requiredKeychainAccessGroups: [])],
+            archiveBytes: 1_024
+        )
+        let blocked = ProvisioningAuditService.makeAudit(
+            inspection: inspection, profiles: [plain], preferredProfileID: plain.id,
+            certificate: certificate(), requestedBundleID: "", removeExtensions: false,
+            deviceIdentifier: "DEVICE"
+        )
+        #expect(blocked.rows.first?.state == .missingAppGroups)
+        #expect(blocked.onlyAppGroupsBlocked)
+        #expect(!blocked.isReady)
+
+        let signed = ProvisioningAuditService.makeAudit(
+            inspection: inspection, profiles: [plain], preferredProfileID: plain.id,
+            certificate: certificate(), requestedBundleID: "", removeExtensions: false,
+            ignoreAppGroups: true, deviceIdentifier: "DEVICE"
+        )
+        #expect(signed.isReady)
+        #expect(!signed.onlyAppGroupsBlocked)
+    }
+
     @Test("A missing IPA fails the install with a reason instead of hanging")
     @MainActor
     func installMissingPackage() {

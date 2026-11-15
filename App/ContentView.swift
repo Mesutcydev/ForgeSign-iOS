@@ -23,6 +23,8 @@ struct ContentView: View {
     @State private var autoBundleID: String?
     @State private var removeExtensions = false
     @State private var enableDocuments = false
+    /// Set by "Sign Without App Groups": the profile may grant no App Groups.
+    @State private var allowMissingAppGroups = false
     /// Off by default so existing signing is unchanged. On = AltStore's rule:
     /// only the profile entitlements the app itself declares.
     @AppStorage("matchAppEntitlements") private var matchAppEntitlements = false
@@ -122,6 +124,14 @@ struct ContentView: View {
                                 GlassSecondaryButton(label: "Sign Without App Extensions",
                                                      systemImage: "puzzlepiece.extension") {
                                     removeExtensions = true
+                                    sign(allowAutomaticProvisioning: false)
+                                }
+                                .padding(.horizontal, T.pad)
+                                .padding(.top, 12)
+                            } else if canSignWithoutAppGroups {
+                                GlassSecondaryButton(label: "Sign Without App Groups",
+                                                     systemImage: "lock.open") {
+                                    allowMissingAppGroups = true
                                     sign(allowAutomaticProvisioning: false)
                                 }
                                 .padding(.horizontal, T.pad)
@@ -524,6 +534,7 @@ struct ContentView: View {
                 }
                 if let bundleID { bundleId = bundleID }
                 provisioningAudit = nil
+                allowMissingAppGroups = false
                 signer.pruneStagedArchives(keeping: localURL)
                 preflightState = .inspecting
                 signer.beginInputCheck()
@@ -639,6 +650,7 @@ struct ContentView: View {
             certificate: certStore.selected,
             requestedBundleID: bundleId,
             removeExtensions: removeExtensions,
+            ignoreAppGroups: allowMissingAppGroups,
             deviceIdentifier: automaticPath
                 ? altServerDeviceIdentifier
                 : ProvisioningAuditService.currentDeviceIdentifier
@@ -667,12 +679,18 @@ struct ContentView: View {
         !removeExtensions && provisioningAudit?.onlyExtensionsBlocked == true
     }
 
+    private var canSignWithoutAppGroups: Bool {
+        !allowMissingAppGroups && provisioningAudit?.onlyAppGroupsBlocked == true
+    }
+
     private var canSignManually: Bool {
         certStore.selected != nil && profileStore.selected != nil && effectivePassword != nil
     }
 
     private func sign(allowAutomaticProvisioning: Bool = true) {
         guard !signer.isBusy, !isImporting else { return }
+        // "Sign Without App Groups" consents to one sign attempt, not the IPA.
+        defer { allowMissingAppGroups = false }
         signNotice = nil
         guard let ipa = ipaURL else {
             signNotice = "Choose an IPA first — there is nothing to sign yet."
@@ -693,6 +711,7 @@ struct ContentView: View {
                 certificate: certStore.selected,
                 requestedBundleID: bundleId,
                 removeExtensions: removeExtensions,
+                ignoreAppGroups: allowMissingAppGroups,
                 deviceIdentifier: altServerDeviceIdentifier
             )
             provisioningAudit = audit
@@ -727,16 +746,24 @@ struct ContentView: View {
             certificate: cert,
             requestedBundleID: bundleId,
             removeExtensions: removeExtensions,
+            ignoreAppGroups: allowMissingAppGroups,
             deviceIdentifier: automaticProvisioningEnabled && isAppleAccountReady
                 ? altServerDeviceIdentifier
                 : ProvisioningAuditService.currentDeviceIdentifier
         )
         provisioningAudit = audit
         if let blocker = audit.rows.first(where: { $0.state.isBlocking }) {
-            signNotice = "\(blocker.kind.displayName) \(blocker.resolvedBundleID): \(blocker.detail) "
-                + (canSignWithoutExtensions
-                    ? "Import a matching profile, or sign without app extensions. Extension features, such as widgets or sharing, will be unavailable."
-                    : "Import a matching profile or use Apple Account provisioning.")
+            let advice: String
+            if canSignWithoutExtensions {
+                advice = "Import a matching profile, or sign without app extensions. Extension features, such as widgets or sharing, will be unavailable."
+            } else if audit.onlyAppGroupsBlocked {
+                advice = "The \(blocker.kind.displayName.lowercased()) needs App Groups (\(blocker.requiredAppGroups.joined(separator: ", "))). "
+                    + "To sign now, turn them off; the signed app loses access to their shared data. "
+                    + "Or import a profile that grants them."
+            } else {
+                advice = "Import a matching profile or use Apple Account provisioning."
+            }
+            signNotice = "\(blocker.kind.displayName) \(blocker.resolvedBundleID): \(blocker.detail) " + advice
             return
         }
 

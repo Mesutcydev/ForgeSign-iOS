@@ -56,6 +56,13 @@ struct ProvisioningAudit: Equatable, Sendable {
         return !blocked.isEmpty && blocked.allSatisfy { $0.kind == .extension }
     }
 
+    /// True when the only blocker is an App Group the profile doesn't grant,
+    /// so signing without App Groups lets the app sign.
+    var onlyAppGroupsBlocked: Bool {
+        let blocked = rows.filter { $0.state.isBlocking }
+        return !blocked.isEmpty && blocked.allSatisfy { $0.state == .missingAppGroups }
+    }
+
     var firstBlockingMessage: String? {
         firstBlockingMessage(includeNested: true)
     }
@@ -75,13 +82,19 @@ enum ProvisioningAuditService {
                           certificate: CertificateRecord?,
                           requestedBundleID: String,
                           removeExtensions: Bool,
+                          ignoreAppGroups: Bool = false,
                           deviceIdentifier: String? = currentDeviceIdentifier,
                           now: Date = .now) -> ProvisioningAudit {
         let trimmedBundleID = requestedBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
         let rootOriginalID = inspection.bundleIdentifier
         let rootResolvedID = trimmedBundleID.isEmpty ? rootOriginalID : trimmedBundleID
+        // Signing without App Groups drops the requirement, so a profile that
+        // grants none is enough.
+        let bundles = ignoreAppGroups
+            ? inspection.bundles.map(\.droppingAppGroupRequirements)
+            : inspection.bundles
 
-        var rows = inspection.bundles.map { bundle -> ProvisioningAuditRow in
+        var rows = bundles.map { bundle -> ProvisioningAuditRow in
             let resolvedID = resolvedBundleID(for: bundle.bundleIdentifier,
                                               rootOriginalID: rootOriginalID,
                                               rootResolvedID: rootResolvedID)
@@ -123,7 +136,7 @@ enum ProvisioningAuditService {
             return result
         }
 
-        reuseAppProfileForExtensions(in: &rows, bundles: inspection.bundles,
+        reuseAppProfileForExtensions(in: &rows, bundles: bundles,
                                      profiles: profiles, certificate: certificate,
                                      deviceIdentifier: deviceIdentifier, now: now)
         enforceSharedAppGroups(in: &rows)
@@ -435,5 +448,14 @@ enum BundleIdentifierResolver {
             return bundleID
         }
         return resolvedRoot + bundleID.dropFirst(originalRoot.count)
+    }
+}
+
+private extension SignableBundleInspection {
+    var droppingAppGroupRequirements: SignableBundleInspection {
+        SignableBundleInspection(path: path, kind: kind, bundleIdentifier: bundleIdentifier,
+                                 entitlementsAvailable: entitlementsAvailable,
+                                 requiredAppGroups: [],
+                                 requiredKeychainAccessGroups: requiredKeychainAccessGroups)
     }
 }
