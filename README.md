@@ -157,6 +157,10 @@ installed as an upgrade so app data survives.
 
 **Apple Account provisioning.** Turn on *Use Apple Account provisioning*, then enter your Apple Account email and password and the device UDID. Pick an *Anisette source*; *Test anisette source* checks it. If several AltServers are on your network, choose one. A team the account cannot use is replaced by the account's own team, and the signing log records the switch. Apple's two-factor code is entered in a prompt; the prompt cancels itself after five minutes.
 
+## What’s new in 2.8.9
+
+- **Files imports on AltServer installs.** Certificates (`.p12` and `.pfx`) and provisioning profiles (`.mobileprovision`) use the same copy-mode picker as IPAs.
+
 ## What’s new in 2.8.8
 
 - **Apple Account provisioning uses your account’s own team** when the imported certificate belongs to a team the signed-in Apple Account cannot use, and the signing log records the switch.

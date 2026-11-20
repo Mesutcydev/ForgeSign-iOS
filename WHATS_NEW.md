@@ -1,8 +1,20 @@
-# ForgeSign 2.8.8
+# ForgeSign 2.8.9
 
-A follow-up to 2.8.7 for Apple Account provisioning when the imported certificate belongs to a team the signed-in Apple Account cannot use.
+## What's new in 2.8.9
+
+- **Import signing files from Files.** If ForgeSign was installed through AltServer, the certificate or provisioning profile picker could gray out files even when IPA selection worked. Certificate (`.p12` and `.pfx`) and provisioning profile (`.mobileprovision`) imports now use the same copy-mode picker as IPA imports.
+
+## Download
+
+The IPA is **unsigned**. AltServer can sign it during installation.
+
+[Download the latest IPA](https://github.com/Mesutcydev/ForgeSign-iOS/releases/latest/download/ForgeSign-latest.ipa)
+
+`ForgeSign-2.8.9.ipa` and `ForgeSign-latest.ipa` contain the same build, **2.8.9 (40)**. SHA-256 checksums are attached to the release.
 
 ## What's new in 2.8.8
+
+A follow-up to 2.8.7 for Apple Account provisioning when the imported certificate belongs to a team the signed-in Apple Account cannot use.
 
 - **Apple Account provisioning uses your account's own team.** Previously, when the imported certificate's team was not available to the signed-in Apple Account, provisioning stopped with "Team … is not available to this Apple Account". It now provisions in the account's own team and records that switch in the signing log. The imported certificate is reused only if that team actually holds it. If the team already has a development certificate ForgeSign has no key for, the existing conflict message still appears, and ForgeSign does not revoke that certificate.
 

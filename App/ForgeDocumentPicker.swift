@@ -5,18 +5,13 @@ import UniformTypeIdentifiers
 /// Imports a picked file into the app's container (a copy), then each caller
 /// validates the extension in its callback.
 ///
-/// The type filter here is deliberately maximal (`.item` = every item). The
-/// "picker opens but nothing is selectable" symptom on sideloaded builds is
-/// NOT caused by this filter — even `.item`/`.data` (everything) shows it, and
-/// apps *signed by* ForgeSign hit the same thing without ever using this view.
-/// That points at the entitlements applied via the provisioning profile, not
-/// the picker. Keep this simple; do not reintroduce custom UTI strings or the
-/// deprecated `documentTypes:in:` initializer (they only add fragility).
+/// Use a broad filter so Files can supply items with provider-specific types.
 struct ForgeDocumentPicker: UIViewControllerRepresentable {
+    @Binding var isPresented: Bool
     let onPick: (URL) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick)
+        Coordinator(isPresented: $isPresented, onPick: onPick)
     }
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
@@ -31,14 +26,25 @@ struct ForgeDocumentPicker: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: UIDocumentPickerViewController, context: Context) {}
 
     final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        private let isPresented: Binding<Bool>
         private let onPick: (URL) -> Void
 
-        init(onPick: @escaping (URL) -> Void) {
+        init(isPresented: Binding<Bool>, onPick: @escaping (URL) -> Void) {
+            self.isPresented = isPresented
             self.onPick = onPick
         }
 
         func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
             if let url = urls.first { onPick(url) }
+            dismissPicker()
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            dismissPicker()
+        }
+
+        private func dismissPicker() {
+            Task { @MainActor in isPresented.wrappedValue = false }
         }
     }
 }
