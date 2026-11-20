@@ -1,5 +1,4 @@
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Picker + manager for remembered signing certificates. Shows remaining
 /// validity per certificate, imports new .p12 files (validated against a
@@ -72,23 +71,16 @@ struct CertificatesSheet: View {
                 } message: { _ in
                     Text("The .p12 file and its saved Keychain password are removed from this device.")
                 }
-                .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
-                    let url: URL
-                    switch result {
-                    case .success(let urls):
-                        guard let first = urls.first else { return }
-                        url = first
-                    case .failure(let failure):
-                        error = failure.localizedDescription
-                        return
+                .fullScreenCover(isPresented: $showImporter) {
+                    ForgeDocumentPicker(isPresented: $showImporter) { url in
+                        guard ["p12", "pfx"].contains(url.pathExtension.lowercased()) else {
+                            error = "Choose a .p12 or .pfx certificate."
+                            return
+                        }
+                        store.pendingImportURL = url
+                        pendingPassword = ""
+                        error = nil
                     }
-                    guard ["p12", "pfx"].contains(url.pathExtension.lowercased()) else {
-                        error = "Choose a .p12 or .pfx certificate."
-                        return
-                    }
-                    store.pendingImportURL = url
-                    pendingPassword = ""
-                    error = nil
                 }
             }
         }
